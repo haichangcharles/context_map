@@ -1,0 +1,43 @@
+<svg width="1200" height="360" viewBox="0 0 1200 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Context Map banner">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="80" y1="300" x2="1120" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22D3EE" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#818CF8" stop-opacity="0.28"/>
+    </linearGradient>
+    <filter id="blur" x="0" y="0" width="1200" height="360" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="360" rx="24" fill="url(#bg)"/>
+  <g filter="url(#blur)">
+    <ellipse cx="310" cy="320" rx="360" ry="100" fill="url(#accent)"/>
+    <ellipse cx="980" cy="40" rx="300" ry="90" fill="url(#accent)"/>
+  </g>
+
+  <g opacity="0.22" stroke="#94A3B8" stroke-width="1.2">
+    <path d="M140 94H318"/>
+    <path d="M430 94H628"/>
+    <path d="M760 94H1030"/>
+    <path d="M250 166H486"/>
+    <path d="M620 166H900"/>
+    <circle cx="126" cy="94" r="14" fill="#0EA5E9"/>
+    <circle cx="332" cy="94" r="10" fill="#6366F1"/>
+    <circle cx="642" cy="94" r="10" fill="#38BDF8"/>
+    <circle cx="1044" cy="94" r="14" fill="#818CF8"/>
+    <circle cx="236" cy="166" r="12" fill="#22D3EE"/>
+    <circle cx="500" cy="166" r="10" fill="#60A5FA"/>
+    <circle cx="914" cy="166" r="12" fill="#6366F1"/>
+  </g>
+
+  <text x="90" y="234" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="64" font-weight="700" letter-spacing="1.5">
+    CONTEXT MAP
+  </text>
+  <text x="92" y="276" fill="#CBD5E1" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="400">
+    Structured conversations for multi-threaded AI workflows
+  </text>
+</svg>
