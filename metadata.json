@@ -1,0 +1,5 @@
+{
+  "name": "Reconstructable Conversational Computation System",
+  "description": "A structured conversational web system supporting branching, re-branching, context boundary editing, and structure reuse.",
+  "requestFramePermissions": []
+}

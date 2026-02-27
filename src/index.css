@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+.markdown-body {
+  line-height: 1.85;
+  letter-spacing: 0.01em;
+}
+
+.markdown-body > * + * {
+  margin-top: 0.8rem;
+}
+
+.markdown-body p + p {
+  margin-top: 0.95rem;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin-top: 1.35rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.35;
+}
+
+.markdown-body hr {
+  margin: 1.1rem 0;
+  border: 0;
+  border-top: 1px solid #d4d4d8;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin-top: 0.65rem;
+  margin-bottom: 0.65rem;
+  padding-left: 1.3rem;
+}
+
+.markdown-body li + li {
+  margin-top: 0.35rem;
+}
