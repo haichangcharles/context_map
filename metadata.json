@@ -1,5 +1,5 @@
 {
-  "name": "Reconstructable Conversational Computation System",
-  "description": "A structured conversational web system supporting branching, re-branching, context boundary editing, and structure reuse.",
+  "name": "Context Map",
+  "description": "A structured conversational workspace for branching, context control, and reusable workflow patterns.",
   "requestFramePermissions": []
 }
