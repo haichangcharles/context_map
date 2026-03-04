@@ -4,18 +4,25 @@ import { Node, Branch } from '../types';
 import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Save, CheckCircle2, Circle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
-import { generateResponseStream, generateMainlineSummary, extractPattern } from '../services/gemini';
+import { generateResponseStream, generateMainlineSummary, extractPattern, detectBranchSuggestion } from '../services/gemini';
+
+type PendingBranchSuggestion = {
+  anchorNodeId: string;
+  reason: string;
+  nodeIdsToMove: string[];
+};
 
 export default function ConversationStream() {
   const { 
     projects, activeProjectId, nodes, branches, mainlines, contexts, patterns,
-    addNode, createBranch, promoteBranch, returnToMainline, toggleNodeInclusion,
+    addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, toggleNodeInclusion,
     updateBranchSummary, createPattern, setActivePattern, setActiveStep, batchToggleInclusion, updateNodeContent
   } = useAppStore();
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isExtractingPattern, setIsExtractingPattern] = useState(false);
+  const [pendingBranchSuggestion, setPendingBranchSuggestion] = useState<PendingBranchSuggestion | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   
   // Selection state
@@ -79,16 +86,44 @@ export default function ConversationStream() {
   const isMainline = context.base_path === 'mainline';
   const currentBranch = !isMainline ? branches[context.base_path] : null;
 
+  useEffect(() => {
+    if (!isMainline && pendingBranchSuggestion) {
+      setPendingBranchSuggestion(null);
+    }
+  }, [isMainline, pendingBranchSuggestion]);
+
+  const rawMainlineNodeIds = mainlines[project.project_id] || [];
+  const validMainlineNodeIds = rawMainlineNodeIds.filter((id) => nodes[id]?.project_id === project.project_id);
+  const fallbackMainlineNodeIds = Object.values(nodes)
+    .filter((n) => n.project_id === project.project_id && n.branch_id === null)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .map((n) => n.node_id);
+  const resolvedMainlineNodeIds =
+    validMainlineNodeIds.length > 0 ? validMainlineNodeIds : fallbackMainlineNodeIds;
+
+  useEffect(() => {
+    if (rawMainlineNodeIds.length > 0 && validMainlineNodeIds.length === 0) {
+      console.warn('[conversation-mainline] invalid mainline ids detected', {
+        projectId: project.project_id,
+        rawMainlineCount: rawMainlineNodeIds.length,
+      });
+    }
+    if (rawMainlineNodeIds.length === 0 && fallbackMainlineNodeIds.length > 0) {
+      console.warn('[conversation-mainline] empty mainline; using fallback for rendering only', {
+        projectId: project.project_id,
+        fallbackCount: fallbackMainlineNodeIds.length,
+      });
+    }
+  }, [project.project_id, rawMainlineNodeIds.length, validMainlineNodeIds.length, fallbackMainlineNodeIds.length]);
+
   // Compute the visible nodes based on the base_path
   let visibleNodes: Node[] = [];
   if (isMainline) {
-    const mainlineNodeIds = mainlines[project.project_id] || [];
-    visibleNodes = mainlineNodeIds.map(id => nodes[id]).filter(Boolean);
+    visibleNodes = resolvedMainlineNodeIds.map(id => nodes[id]).filter(Boolean);
   } else if (currentBranch) {
-    const mainlineNodeIds = mainlines[project.project_id] || [];
-    const anchorIndex = mainlineNodeIds.indexOf(currentBranch.anchor_node_id);
+    const anchorIndex = resolvedMainlineNodeIds.indexOf(currentBranch.anchor_node_id);
     const baseNodes = anchorIndex !== -1 
-      ? mainlineNodeIds.slice(0, anchorIndex + 1).map(id => nodes[id])
+      ? resolvedMainlineNodeIds.slice(0, anchorIndex + 1).map(id => nodes[id])
       : [];
     
     const branchNodes = Object.values(nodes)
@@ -108,12 +143,59 @@ export default function ConversationStream() {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
+    if (pendingBranchSuggestion) {
+      setPendingBranchSuggestion(null);
+    }
+
     const userMsg = input.trim();
     setInput('');
     setIsLoading(true);
 
-    const parentId = visibleNodes.length > 0 ? visibleNodes[visibleNodes.length - 1].node_id : null;
-    const branchId = isMainline ? null : currentBranch?.branch_id || null;
+    const stateBeforeSend = useAppStore.getState();
+    const liveProject = stateBeforeSend.projects[project.project_id];
+    const liveContext = liveProject ? stateBeforeSend.contexts[liveProject.active_context_id] : null;
+    const liveIsMainline = liveContext?.base_path === 'mainline';
+    const liveBranch = !liveIsMainline && liveContext ? stateBeforeSend.branches[liveContext.base_path] : null;
+    const liveRawMainline = stateBeforeSend.mainlines[project.project_id] || [];
+    const liveValidMainline = liveRawMainline.filter((id) => stateBeforeSend.nodes[id]?.project_id === project.project_id);
+    const liveFallbackMainline = Object.values(stateBeforeSend.nodes)
+      .filter((n) => n.project_id === project.project_id && n.branch_id === null)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .map((n) => n.node_id);
+    const liveResolvedMainline = liveValidMainline.length > 0 ? liveValidMainline : liveFallbackMainline;
+
+    const liveVisibleNodes: Node[] = liveIsMainline
+      ? liveResolvedMainline.map((id) => stateBeforeSend.nodes[id]).filter(Boolean)
+      : liveBranch
+      ? [
+          ...(() => {
+            const anchorIndex = liveResolvedMainline.indexOf(liveBranch.anchor_node_id);
+            return anchorIndex !== -1
+              ? liveResolvedMainline.slice(0, anchorIndex + 1).map((id) => stateBeforeSend.nodes[id]).filter(Boolean)
+              : [];
+          })(),
+          ...Object.values(stateBeforeSend.nodes)
+            .filter((n) => n.branch_id === liveBranch.branch_id)
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+        ]
+      : [];
+
+    const parentId = liveVisibleNodes.length > 0 ? liveVisibleNodes[liveVisibleNodes.length - 1].node_id : null;
+    const branchId = liveIsMainline ? null : liveBranch?.branch_id || null;
+    const shouldDetectBranch = !!liveIsMainline && !!parentId;
+
+    console.debug('[send-context]', {
+      projectId: project.project_id,
+      basePath: liveContext?.base_path ?? 'unknown',
+      parentId,
+      parentBranchId: parentId ? stateBeforeSend.nodes[parentId]?.branch_id ?? null : null,
+      branchId,
+      visibleCount: liveVisibleNodes.length,
+    });
+
+    const branchDetectionPromise = shouldDetectBranch
+      ? detectBranchSuggestion(liveVisibleNodes, userMsg)
+      : Promise.resolve(null);
 
     const userNodeId = addNode(project.project_id, parentId, 'user', userMsg, branchId);
     const assistantNodeId = addNode(project.project_id, userNodeId, 'assistant', '', branchId);
@@ -123,25 +205,15 @@ export default function ConversationStream() {
       const currentMainline = state.mainlines[project.project_id] || [];
       const validMainline = currentMainline.filter((id) => state.nodes[id]?.project_id === project.project_id);
 
-      // Defensive repair for rare race conditions after streaming completion.
-      if (validMainline.length === 0) {
-        const fallbackMainline = Object.values(state.nodes)
-          .filter((n) => n.project_id === project.project_id && n.branch_id === null)
-          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-          .map((n) => n.node_id);
-
-        if (fallbackMainline.length > 0) {
-          useAppStore.setState((prev) => ({
-            mainlines: {
-              ...prev.mainlines,
-              [project.project_id]: fallbackMainline,
-            },
-          }));
-        }
-        return;
-      }
-
       if (validMainline.length !== currentMainline.length) {
+        if (validMainline.length === 0) {
+          console.warn('[mainline-repair] skipped destructive rewrite for empty sanitized mainline', {
+            projectId: project.project_id,
+            currentMainlineLength: currentMainline.length,
+          });
+          return;
+        }
+
         useAppStore.setState((prev) => ({
           mainlines: {
             ...prev.mainlines,
@@ -190,12 +262,41 @@ export default function ConversationStream() {
       }
       repairMainlineIfNeeded();
     } finally {
+      const branchDecision = await branchDetectionPromise;
+      if (branchDecision?.shouldBranch && parentId) {
+        const state = useAppStore.getState();
+        const activeContextId = state.projects[project.project_id]?.active_context_id;
+        const activeContext = activeContextId ? state.contexts[activeContextId] : null;
+        if (activeContext?.base_path === 'mainline') {
+          setPendingBranchSuggestion({
+            anchorNodeId: parentId,
+            reason: branchDecision.reason || 'This looks like a temporary or off-topic subtask.',
+            nodeIdsToMove: [userNodeId, assistantNodeId],
+          });
+        }
+      }
       setIsLoading(false);
     }
   };
 
   const handleReBranch = (nodeId: string) => {
     createBranch(project.project_id, nodeId);
+  };
+
+  const handleAcceptBranchSuggestion = () => {
+    if (!pendingBranchSuggestion) return;
+    const createdBranchId = acceptSuggestedBranch(
+      project.project_id,
+      pendingBranchSuggestion.anchorNodeId,
+      pendingBranchSuggestion.nodeIdsToMove
+    );
+    if (!createdBranchId) {
+      console.warn('[branch-accept] no nodes moved for suggested branch', {
+        projectId: project.project_id,
+        anchorNodeId: pendingBranchSuggestion.anchorNodeId,
+      });
+    }
+    setPendingBranchSuggestion(null);
   };
 
   const handleNodeClick = (e: React.MouseEvent, nodeId: string) => {
@@ -330,6 +431,12 @@ export default function ConversationStream() {
           visibleNodes.map((node) => {
             const isExcluded = context.excluded_nodes.includes(node.node_id);
             const isSelected = selectedNodeIds.has(node.node_id);
+            const inlineSuggestionTargetNodeId = pendingBranchSuggestion?.nodeIdsToMove[1];
+            const showInlineSuggestion =
+              isMainline &&
+              !!pendingBranchSuggestion &&
+              node.role === 'assistant' &&
+              inlineSuggestionTargetNodeId === node.node_id;
             return (
               <div
                 key={node.node_id}
@@ -389,6 +496,29 @@ export default function ConversationStream() {
                   ) : (
                     <div className="markdown-body prose prose-sm max-w-none dark:prose-invert">
                       <ReactMarkdown>{node.content}</ReactMarkdown>
+                    </div>
+                  )}
+                  {showInlineSuggestion && (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-amber-900">Suggest opening a new branch?</p>
+                        <p className="text-xs text-amber-800 mt-1">{pendingBranchSuggestion.reason}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => setPendingBranchSuggestion(null)}
+                          className="px-3 py-1.5 rounded-md text-xs font-medium text-zinc-700 bg-white border border-zinc-300 hover:bg-zinc-100 transition-colors"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          onClick={handleAcceptBranchSuggestion}
+                          className="px-3 py-1.5 rounded-md text-xs font-medium !text-white bg-zinc-900 hover:bg-zinc-800 transition-colors"
+                          style={{ color: '#fff' }}
+                        >
+                          Accept
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

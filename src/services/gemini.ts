@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Node, Pattern } from '../types';
+import { BranchSuggestionDecision, parseBranchSuggestionDecision } from '../utils/branchSuggestion';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -247,5 +248,34 @@ export const extractPattern = async (contextNodes: Node[]): Promise<{ name: stri
   } catch (error) {
     console.error('Error extracting pattern:', error);
     throw error;
+  }
+};
+
+export const detectBranchSuggestion = async (
+  linearContextNodes: Node[],
+  userMessage: string
+): Promise<BranchSuggestionDecision> => {
+  const messages = mapNodesToMessages(linearContextNodes);
+  messages.push({
+    role: 'user',
+    content: userMessage,
+  });
+
+  const systemPrompt =
+    'You decide whether the latest user message should open a new conversation branch from the previous message in a linear chat. ' +
+    'Branch-worthy examples: temporary one-off Q&A, clearly off-topic requests (e.g., weather), or obvious subtasks detached from the current main objective. ' +
+    'Return strict JSON only with shape: {"should_branch":boolean,"confidence":number,"reason":"short reason"}. ' +
+    'Set confidence in [0,1].';
+
+  try {
+    const result = await callOpenAICompat(systemPrompt, messages, { type: 'json_object' });
+    return parseBranchSuggestionDecision(result);
+  } catch (error) {
+    console.error('Error detecting branch suggestion:', error);
+    return {
+      shouldBranch: false,
+      confidence: 0,
+      reason: '',
+    };
   }
 };

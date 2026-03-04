@@ -31,6 +31,7 @@ interface AppState {
   addNode: (projectId: string, parentId: string | null, role: Role, content: string, branchId: string | null) => string;
   updateNodeContent: (nodeId: string, content: string, mode?: 'replace' | 'append') => void;
   createBranch: (projectId: string, anchorNodeId: string) => string;
+  acceptSuggestedBranch: (projectId: string, anchorNodeId: string, nodeIdsToMove: string[]) => string | null;
   promoteBranch: (projectId: string, branchId: string) => void;
   returnToMainline: (projectId: string) => void;
   toggleNodeInclusion: (projectId: string, nodeId: string) => void;
@@ -294,21 +295,33 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addNode: (projectId, parentId, role, content, branchId) => {
     const nodeId = uuidv4();
-    const newNode: Node = {
-      node_id: nodeId,
-      project_id: projectId,
-      parent_id: parentId,
-      role,
-      content,
-      branch_id: branchId,
-      timestamp: new Date().toISOString(),
-      metadata: {
-        natural_origin_branch_id: branchId ?? null,
-      },
-    };
 
     set((state) => {
       const project = state.projects[projectId];
+      if (!project) return state;
+      const context = state.contexts[project.active_context_id];
+      if (!context) return state;
+      const currentMainline = state.mainlines[projectId] || [];
+      const mainlineTailId = currentMainline.length > 0 ? currentMainline[currentMainline.length - 1] : null;
+
+      const resolvedParentId =
+        context.base_path === 'mainline' && branchId === null
+          ? mainlineTailId ?? parentId
+          : parentId;
+
+      const newNode: Node = {
+        node_id: nodeId,
+        project_id: projectId,
+        parent_id: resolvedParentId,
+        role,
+        content,
+        branch_id: branchId,
+        timestamp: new Date().toISOString(),
+        metadata: {
+          natural_origin_branch_id: branchId ?? null,
+        },
+      };
+
       const updates: Partial<AppState> = {
         nodes: { ...state.nodes, [nodeId]: newNode },
       };
@@ -321,9 +334,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       // If we are on the mainline, append to mainline
-      const context = state.contexts[project.active_context_id];
       if (context.base_path === 'mainline') {
-        const currentMainline = state.mainlines[projectId] || [];
         updates.mainlines = {
           ...state.mainlines,
           [projectId]: [...currentMainline, nodeId],
@@ -390,6 +401,75 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     });
 
+    return branchId;
+  },
+
+  acceptSuggestedBranch: (projectId, anchorNodeId, nodeIdsToMove) => {
+    if (!nodeIdsToMove.length) return null;
+
+    const branchId = uuidv4();
+    const newBranch: Branch = {
+      branch_id: branchId,
+      project_id: projectId,
+      anchor_node_id: anchorNodeId,
+      status: 'active',
+    };
+
+    let movedCount = 0;
+
+    set((state) => {
+      const project = state.projects[projectId];
+      if (!project) return state;
+      const context = state.contexts[project.active_context_id];
+      if (!context) return state;
+      const snapshot = pickStructure(state);
+      const pastStructureSnapshots = [...state.pastStructureSnapshots, snapshot].slice(-MAX_STRUCTURE_HISTORY);
+
+      const updatedNodes: Record<string, Node> = { ...state.nodes };
+      const removalSet = new Set<string>();
+      const expectedFirstMovedNodeId = nodeIdsToMove[0] || null;
+
+      nodeIdsToMove.forEach((nodeId) => {
+        const node = updatedNodes[nodeId];
+        if (!node || node.project_id !== projectId) return;
+        removalSet.add(nodeId);
+        movedCount += 1;
+        updatedNodes[nodeId] = {
+          ...node,
+          parent_id: nodeId === expectedFirstMovedNodeId ? anchorNodeId : node.parent_id,
+          branch_id: branchId,
+          metadata: {
+            ...node.metadata,
+            natural_origin_branch_id: branchId,
+          },
+        };
+      });
+
+      const currentMainline = state.mainlines[projectId] || [];
+      const currentNaturalMainline = state.naturalMainlines[projectId] || [];
+      const nextMainline = currentMainline.filter((id) => !removalSet.has(id));
+      const nextNaturalMainline = currentNaturalMainline.filter((id) => !removalSet.has(id));
+
+      const updatedContext: ContextView = {
+        ...context,
+        base_path: branchId,
+        included_nodes: [],
+        excluded_nodes: [],
+      };
+
+      return {
+        pastStructureSnapshots,
+        futureStructureSnapshots: [],
+        nodes: updatedNodes,
+        branches: { ...state.branches, [branchId]: newBranch },
+        naturalBranches: { ...state.naturalBranches, [branchId]: newBranch },
+        mainlines: { ...state.mainlines, [projectId]: nextMainline },
+        naturalMainlines: { ...state.naturalMainlines, [projectId]: nextNaturalMainline },
+        contexts: { ...state.contexts, [context.context_id]: updatedContext },
+      };
+    });
+
+    if (movedCount === 0) return null;
     return branchId;
   },
 

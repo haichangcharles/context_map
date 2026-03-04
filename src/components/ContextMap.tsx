@@ -243,37 +243,48 @@ export default function ContextMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const previousLayoutModeRef = useRef<LayoutMode>('tree');
   const previousLayoutRefreshTokenRef = useRef(0);
+  const previousStructureSignatureRef = useRef<string>('');
 
   const project = activeProjectId ? projects[activeProjectId] : null;
   const context = project ? contexts[project.active_context_id] : null;
 
   const onPaneClick = useCallback(() => setContextMenu(null), []);
 
+  const resolvedMainlineNodeIds = useMemo(() => {
+    if (!project) return [] as string[];
+    const rawMainline = mainlines[project.project_id] || [];
+    const validMainline = rawMainline.filter((id) => nodes[id]?.project_id === project.project_id);
+    if (validMainline.length > 0) return validMainline;
+    return Object.values(nodes)
+      .filter((n) => n.project_id === project.project_id && n.branch_id === null)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .map((n) => n.node_id);
+  }, [project, mainlines, nodes]);
+
   const activeNodeIds = useMemo(() => {
     const ids = new Set<string>();
     if (!project || !context) return ids;
-    const mainlineNodeIds = mainlines[project.project_id] || [];
     const isMainline = context.base_path === 'mainline';
     const currentBranch = !isMainline ? branches[context.base_path] : null;
 
     if (isMainline) {
-      mainlineNodeIds.forEach(id => ids.add(id));
+      resolvedMainlineNodeIds.forEach(id => ids.add(id));
     } else if (currentBranch) {
-      const anchorIndex = mainlineNodeIds.indexOf(currentBranch.anchor_node_id);
+      const anchorIndex = resolvedMainlineNodeIds.indexOf(currentBranch.anchor_node_id);
       if (anchorIndex !== -1) {
-        mainlineNodeIds.slice(0, anchorIndex + 1).forEach(id => ids.add(id));
+        resolvedMainlineNodeIds.slice(0, anchorIndex + 1).forEach(id => ids.add(id));
       }
       Object.values(nodes)
         .filter(n => n.branch_id === currentBranch.branch_id)
         .forEach(n => ids.add(n.node_id));
     }
     return ids;
-  }, [project, context, mainlines, branches, nodes]);
+  }, [project, context, resolvedMainlineNodeIds, branches, nodes]);
 
   useEffect(() => {
     if (!project || !context) return;
 
-    const mainlineNodeIds = mainlines[project.project_id] || [];
+    const mainlineNodeIds = resolvedMainlineNodeIds;
     const modeChanged = previousLayoutModeRef.current !== layoutMode;
     const relayoutRequested = previousLayoutRefreshTokenRef.current !== layoutRefreshToken;
     previousLayoutModeRef.current = layoutMode;
@@ -282,21 +293,70 @@ export default function ContextMap() {
     const initialNodes: FlowNode[] = [];
     const initialEdges: Edge[] = [];
 
-    const projectBranchGroups: BranchGroup[] = Object.values(branches)
-      .filter((branch) => branch.project_id === project.project_id)
+    const projectBranches = Object.values(branches).filter((branch) => branch.project_id === project.project_id);
+    const projectBranchIds = new Set(projectBranches.map((branch) => branch.branch_id));
+    const projectNodes = Object.values(nodes).filter((n) => n.project_id === project.project_id);
+
+    const orphanNodesByBranchId = new Map<string, Node[]>();
+    projectNodes.forEach((node) => {
+      if (!node.branch_id || projectBranchIds.has(node.branch_id)) return;
+      if (!orphanNodesByBranchId.has(node.branch_id)) {
+        orphanNodesByBranchId.set(node.branch_id, []);
+      }
+      orphanNodesByBranchId.get(node.branch_id)!.push(node);
+    });
+
+    if (orphanNodesByBranchId.size > 0) {
+      console.warn('[context-map] rendering orphan branch groups', {
+        projectId: project.project_id,
+        orphanBranchCount: orphanNodesByBranchId.size,
+      });
+    }
+
+    const syntheticOrphanBranches: Branch[] = Array.from(orphanNodesByBranchId.entries()).map(([branchId, orphanNodes]) => {
+      const sorted = [...orphanNodes].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const firstNode = sorted[0];
+      const anchorNodeId =
+        (firstNode.parent_id && nodes[firstNode.parent_id]?.project_id === project.project_id
+          ? firstNode.parent_id
+          : null) ||
+        mainlineNodeIds[0] ||
+        firstNode.node_id;
+
+      return {
+        branch_id: branchId,
+        project_id: project.project_id,
+        anchor_node_id: anchorNodeId,
+        status: 'active',
+      };
+    });
+
+    const projectBranchGroups: BranchGroup[] = [...projectBranches, ...syntheticOrphanBranches]
       .map((branch) => ({
         branch,
-        branchNodes: Object.values(nodes)
+        branchNodes: projectNodes
           .filter((n) => n.branch_id === branch.branch_id)
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
       }))
-      .filter((group) => group.branchNodes.length > 0)
+      .filter((group) => group.branchNodes.length > 0 && !!nodes[group.branch.anchor_node_id])
       .sort((a, b) => {
         const aIndex = mainlineNodeIds.indexOf(a.branch.anchor_node_id);
         const bIndex = mainlineNodeIds.indexOf(b.branch.anchor_node_id);
         if (aIndex !== bIndex) return aIndex - bIndex;
         return new Date(a.branchNodes[0].timestamp).getTime() - new Date(b.branchNodes[0].timestamp).getTime();
       });
+
+    const structureSignature = JSON.stringify({
+      mainline: mainlineNodeIds,
+      projectNodes: projectNodes
+        .map((n) => `${n.node_id}:${n.parent_id ?? 'null'}:${n.branch_id ?? 'mainline'}`)
+        .sort(),
+      branchGroups: projectBranchGroups
+        .map((g) => `${g.branch.branch_id}:${g.branch.anchor_node_id}:${g.branchNodes.map((n) => n.node_id).join(',')}`)
+        .sort(),
+    });
+    const structureChanged = previousStructureSignatureRef.current !== structureSignature;
+    previousStructureSignatureRef.current = structureSignature;
 
     const branchSideById = new Map<string, BranchSide>();
     if (layoutMode === 'mindmap') {
@@ -462,7 +522,7 @@ export default function ContextMap() {
       const prevNodeById = new Map(prevNodes.map((n) => [n.id, n]));
       return structuredNodes.map((node) => {
         const prev = prevNodeById.get(node.id);
-        const keepTreePosition = layoutMode === 'tree' && !modeChanged && !relayoutRequested;
+        const keepTreePosition = layoutMode === 'tree' && !modeChanged && !relayoutRequested && !structureChanged;
         return {
           ...node,
           position: keepTreePosition && prev ? prev.position : node.position,
@@ -472,7 +532,13 @@ export default function ContextMap() {
     });
     setFlowEdges(layoutedEdges);
 
-  }, [nodes, branches, mainlines, contexts, activeProjectId, selectedStartId, activeNodeIds, project, context, toggleNodeInclusion, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken]);
+    if (structureChanged && rfInstance) {
+      window.requestAnimationFrame(() => {
+        rfInstance.fitView({ duration: 300, padding: 0.15 });
+      });
+    }
+
+  }, [nodes, branches, mainlines, contexts, activeProjectId, selectedStartId, activeNodeIds, project, context, toggleNodeInclusion, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken, resolvedMainlineNodeIds, rfInstance]);
 
   // Auto fit view on nodes change
   useEffect(() => {
@@ -502,18 +568,20 @@ export default function ContextMap() {
 
   const handleBatchToggle = () => {
     if (!project || !context) return;
-    
-    const allIncluded = selectedFlowNodes.every(n => {
+
+    const selectedIds = selectedFlowNodes.map((n) => n.id);
+    const includedCount = selectedFlowNodes.reduce((count, n) => {
       const isActive = activeNodeIds.has(n.id);
       const isExcluded = context.excluded_nodes.includes(n.id);
       const isIncluded = context.included_nodes.includes(n.id);
-      return (isActive && !isExcluded) || (!isActive && isIncluded);
-    });
-    
-    const targetAction = allIncluded ? 'exclude' : 'include';
-    
-    batchToggleInclusion(project.project_id, selectedFlowNodes.map(n => n.id), targetAction);
-    
+      const isEffectivelyIncluded = (isActive && !isExcluded) || (!isActive && isIncluded);
+      return count + (isEffectivelyIncluded ? 1 : 0);
+    }, 0);
+
+    // Majority rule: if majority is included, set all to exclude; otherwise set all to include.
+    const action = includedCount > selectedFlowNodes.length / 2 ? 'exclude' : 'include';
+    batchToggleInclusion(project.project_id, selectedIds, action);
+
     setFlowNodes(nds => nds.map(n => ({ ...n, selected: false })));
   };
 
@@ -649,11 +717,18 @@ export default function ContextMap() {
 
         {/* Floating Batch Action Bar */}
         {selectedFlowNodes.length > 0 && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-zinc-900 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-4 z-20">
+          <div
+            className="absolute top-4 left-1/2 -translate-x-1/2 bg-zinc-900 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-4 z-20"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
             <span className="text-sm font-medium">{selectedFlowNodes.length} selected</span>
             <div className="h-4 w-px bg-zinc-700" />
             <button 
-              onClick={handleBatchToggle}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleBatchToggle();
+              }}
               className="text-sm hover:text-indigo-400 transition-colors flex items-center gap-1"
             >
               Toggle Context
