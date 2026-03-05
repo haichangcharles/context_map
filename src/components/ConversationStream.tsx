@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store';
 import { Node, Branch } from '../types';
-import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Save, CheckCircle2, Circle } from 'lucide-react';
+import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Save, CheckCircle2, Circle, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import { generateResponseStream, generateMainlineSummary, extractPattern, detectBranchSuggestion } from '../services/gemini';
 import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
+import { flushChatHistoryQueue, logChatNode } from '../services/chatHistory';
 
 type PendingBranchSuggestion = {
   anchorNodeId: string;
@@ -93,6 +94,12 @@ const summarizeRecent = (items: string[], max = 160): string => {
   return merged.slice(0, max);
 };
 
+const getStreamCharLimit = (): number => {
+  const raw = Number(import.meta.env.VITE_MAX_STREAM_CHARS || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.floor(raw);
+};
+
 const getCurrentLevel = (isMainline: boolean, currentBranch: Branch | null, allBranches: Record<string, Branch>): number => {
   if (isMainline || !currentBranch) return 1;
   return getBranchChainIds(currentBranch.branch_id, allBranches).length + 1;
@@ -126,11 +133,29 @@ export default function ConversationStream() {
   const [isLoading, setIsLoading] = useState(false);
   const [isExtractingPattern, setIsExtractingPattern] = useState(false);
   const [pendingBranchSuggestion, setPendingBranchSuggestion] = useState<PendingBranchSuggestion | null>(null);
+  const [branchSuggestionNotice, setBranchSuggestionNotice] = useState<string | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const wasAutoTruncatedRef = useRef(false);
+  const wasManuallyTruncatedRef = useRef(false);
   
   // Selection state
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
+
+  const handleTruncateOutput = () => {
+    if (!isLoading) return;
+    wasManuallyTruncatedRef.current = true;
+    streamAbortRef.current?.abort();
+  };
+
+  useEffect(() => {
+    void flushChatHistoryQueue();
+  }, []);
+
+  useEffect(() => () => {
+    streamAbortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     const handleLocate = (e: Event) => {
@@ -178,34 +203,53 @@ export default function ConversationStream() {
     }
   }, [project?.project_id, context?.base_path]);
 
-  if (!project || !context) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-zinc-400 bg-white">
-        Select or create a project to start.
-      </div>
-    );
-  }
-
-  const isMainline = context.base_path === 'mainline';
-  const currentBranch = !isMainline ? branches[context.base_path] : null;
+  const isMainline = context?.base_path === 'mainline';
+  const currentBranch = !isMainline && context ? branches[context.base_path] : null;
 
   useEffect(() => {
     if (!pendingBranchSuggestion) return;
+    if (!context) return;
     if (context.base_path !== pendingBranchSuggestion.originBasePath) {
       setPendingBranchSuggestion(null);
     }
-  }, [context.base_path, pendingBranchSuggestion]);
-
-  const rawMainlineNodeIds = mainlines[project.project_id] || [];
-  const validMainlineNodeIds = rawMainlineNodeIds.filter((id) => nodes[id]?.project_id === project.project_id);
-  const fallbackMainlineNodeIds = Object.values(nodes)
-    .filter((n) => n.project_id === project.project_id && n.branch_id === null)
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    .map((n) => n.node_id);
-  const resolvedMainlineNodeIds =
-    validMainlineNodeIds.length > 0 ? validMainlineNodeIds : fallbackMainlineNodeIds;
+  }, [context?.base_path, pendingBranchSuggestion]);
 
   useEffect(() => {
+    if (!branchSuggestionNotice) return;
+    const timer = window.setTimeout(() => setBranchSuggestionNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [branchSuggestionNotice]);
+
+  const rawMainlineNodeIds = project ? mainlines[project.project_id] || [] : [];
+  const validMainlineNodeIds = project
+    ? rawMainlineNodeIds.filter((id) => nodes[id]?.project_id === project.project_id)
+    : [];
+  const fallbackMainlineNodeIds = project
+    ? Object.values(nodes)
+        .filter((n) => n.project_id === project.project_id && n.branch_id === null)
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+        .map((n) => n.node_id)
+    : [];
+  const resolvedMainlineNodeIds = (() => {
+    if (!project) return [];
+    if (validMainlineNodeIds.length > 0) return validMainlineNodeIds;
+    if (fallbackMainlineNodeIds.length > 0) return fallbackMainlineNodeIds;
+    const allProjectNodeIds = Object.values(nodes)
+      .filter((n) => n.project_id === project.project_id)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .map((n) => n.node_id);
+    if (allProjectNodeIds.length > 0) {
+      console.warn('[conversation-mainline] fallback to earliest project node', {
+        projectId: project.project_id,
+        totalProjectNodes: allProjectNodeIds.length,
+      });
+      return [allProjectNodeIds[0]];
+    }
+    return [];
+  })();
+
+  useEffect(() => {
+    if (!project) return;
     if (rawMainlineNodeIds.length > 0 && validMainlineNodeIds.length === 0) {
       console.warn('[conversation-mainline] invalid mainline ids detected', {
         projectId: project.project_id,
@@ -218,7 +262,15 @@ export default function ConversationStream() {
         fallbackCount: fallbackMainlineNodeIds.length,
       });
     }
-  }, [project.project_id, rawMainlineNodeIds.length, validMainlineNodeIds.length, fallbackMainlineNodeIds.length]);
+  }, [project?.project_id, rawMainlineNodeIds.length, validMainlineNodeIds.length, fallbackMainlineNodeIds.length]);
+
+  if (!project || !context) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-zinc-400 bg-white">
+        Select or create a project to start.
+      </div>
+    );
+  }
 
   // Compute the visible nodes based on the base_path
   let visibleNodes: Node[] = [];
@@ -272,6 +324,10 @@ export default function ConversationStream() {
     const userMsg = input.trim();
     setInput('');
     setIsLoading(true);
+    wasAutoTruncatedRef.current = false;
+    wasManuallyTruncatedRef.current = false;
+    const streamAbortController = new AbortController();
+    streamAbortRef.current = streamAbortController;
 
     const stateBeforeSend = useAppStore.getState();
     const liveProject = stateBeforeSend.projects[project.project_id];
@@ -374,6 +430,10 @@ export default function ConversationStream() {
 
     const userNodeId = addNode(project.project_id, parentId, 'user', userMsg, branchId);
     const assistantNodeId = addNode(project.project_id, userNodeId, 'assistant', '', branchId);
+    const persistedUserNode = useAppStore.getState().nodes[userNodeId];
+    if (persistedUserNode) {
+      void logChatNode(persistedUserNode);
+    }
 
     const repairMainlineIfNeeded = () => {
       const state = useAppStore.getState();
@@ -415,11 +475,20 @@ export default function ConversationStream() {
         userMsg,
         activePattern,
         (delta) => updateNodeContent(assistantNodeId, delta, 'append'),
-        context.active_step_index
+        context.active_step_index,
+        {
+          maxChars: getStreamCharLimit(),
+          signal: streamAbortController.signal,
+          onTruncated: () => {
+            wasAutoTruncatedRef.current = true;
+          },
+        }
       );
       const currentAssistantContent = useAppStore.getState().nodes[assistantNodeId]?.content ?? '';
       if (!responseText && !currentAssistantContent.trim()) {
         updateNodeContent(assistantNodeId, 'No response generated.', 'replace');
+      } else if (wasAutoTruncatedRef.current) {
+        updateNodeContent(assistantNodeId, '\n\n[输出已自动截断，可直接继续提问。]', 'append');
       }
       
       // Auto-advance step if pattern is active
@@ -430,13 +499,29 @@ export default function ConversationStream() {
       }
       repairMainlineIfNeeded();
     } catch (error) {
-      console.error(error);
+      const isAbortError =
+        error instanceof DOMException
+          ? error.name === 'AbortError'
+          : typeof error === 'object' &&
+            error !== null &&
+            'name' in error &&
+            (error as { name?: string }).name === 'AbortError';
+      if (!isAbortError) {
+        console.error(error);
+      }
       const currentAssistantContent = useAppStore.getState().nodes[assistantNodeId]?.content ?? '';
-      if (!currentAssistantContent.trim()) {
+      if (!currentAssistantContent.trim() && !isAbortError) {
         updateNodeContent(assistantNodeId, 'Error generating response. Check console.', 'replace');
+      } else if (isAbortError && wasManuallyTruncatedRef.current && currentAssistantContent.trim()) {
+        updateNodeContent(assistantNodeId, '\n\n[输出已手动截断，已按当前内容保存。]', 'append');
       }
       repairMainlineIfNeeded();
     } finally {
+      streamAbortRef.current = null;
+      const persistedAssistantNode = useAppStore.getState().nodes[assistantNodeId];
+      if (persistedAssistantNode) {
+        void logChatNode(persistedAssistantNode);
+      }
       const branchDecision = await branchDetectionPromise;
       logBranchDebug('branch-decision', {
         shouldBranch: branchDecision?.shouldBranch ?? false,
@@ -505,6 +590,31 @@ export default function ConversationStream() {
 
   const handleAcceptBranchSuggestion = () => {
     if (!pendingBranchSuggestion) return;
+    const state = useAppStore.getState();
+    const activeProject = state.projects[project.project_id];
+    const activeContext = activeProject ? state.contexts[activeProject.active_context_id] : null;
+    const expectedBranchId = activeContext?.base_path === 'mainline' ? null : activeContext?.base_path || null;
+    const [userNodeId, assistantNodeId] = pendingBranchSuggestion.nodeIdsToMove;
+    const movedUserNow = state.nodes[userNodeId];
+    const movedAssistantNow = state.nodes[assistantNodeId];
+    const isSuggestionStillValid =
+      !!activeContext &&
+      activeContext.base_path === pendingBranchSuggestion.originBasePath &&
+      !!movedUserNow &&
+      !!movedAssistantNow &&
+      movedUserNow.project_id === project.project_id &&
+      movedAssistantNow.project_id === project.project_id &&
+      movedUserNow.branch_id === expectedBranchId &&
+      movedAssistantNow.branch_id === expectedBranchId &&
+      movedUserNow.parent_id === pendingBranchSuggestion.anchorNodeId &&
+      movedAssistantNow.parent_id === movedUserNow.node_id;
+
+    if (!isSuggestionStillValid) {
+      setPendingBranchSuggestion(null);
+      setBranchSuggestionNotice('Branch suggestion expired. Please regenerate.');
+      return;
+    }
+
     const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
     const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
     const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
@@ -537,6 +647,7 @@ export default function ConversationStream() {
         projectId: project.project_id,
         anchorNodeId: pendingBranchSuggestion.anchorNodeId,
       });
+      setBranchSuggestionNotice('Branch suggestion is stale. Please regenerate.');
     } else {
       setPendingBranchFeedback(createdBranchId, acceptSample);
     }
@@ -700,6 +811,11 @@ export default function ConversationStream() {
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6" onClick={() => { if(selectedNodeIds.size > 0) setSelectedNodeIds(new Set()) }}>
+        {branchSuggestionNotice && (
+          <div className="max-w-3xl mx-auto mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {branchSuggestionNotice}
+          </div>
+        )}
         {visibleNodes.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-zinc-400 space-y-4">
             <div className="w-16 h-16 rounded-full bg-zinc-100 flex items-center justify-center">
@@ -860,9 +976,19 @@ export default function ConversationStream() {
               }
             }}
             placeholder="Type a message... (Shift+Enter for new line, Cmd/Ctrl+Click to select nodes)"
-            className="w-full max-h-48 min-h-[56px] p-4 pr-12 bg-zinc-50 border border-zinc-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-transparent resize-none text-[15px]"
+            className="w-full max-h-48 min-h-[56px] p-4 pr-24 bg-zinc-50 border border-zinc-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-transparent resize-none text-[15px]"
             rows={1}
           />
+          {isLoading && (
+            <button
+              type="button"
+              onClick={handleTruncateOutput}
+              className="absolute right-14 bottom-3 p-2 bg-amber-100 text-amber-900 rounded-lg hover:bg-amber-200 transition-colors"
+              title="截断输出"
+            >
+              <Square size={16} />
+            </button>
+          )}
           <button
             type="submit"
             disabled={!input.trim() || isLoading}

@@ -74,11 +74,47 @@ SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
 
 # Optional search provider
 TAVILY_API_KEY=...
+
+# Optional Supabase sync for chat history
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
 ```
 
 Notes:
 - The app checks `SILICONFLOW_API_KEY` first, then falls back to `ANTHROPIC_API_KEY`
 - If `DEEPSEEK_MODEL` is not set, the default is `deepseek-ai/DeepSeek-V3.2`
+- If Supabase env vars are not provided, chat history is still stored locally and queued for later sync
+- App state (`projects/nodes/branches/context`) is persisted in browser `localStorage` (`context-map.app-state.v1`)
+- Chat history local keys: `context-map.chat-history.by-user.v1`, `context-map.chat-history.pending-sync.v1`
+- Supabase sync auto-retries on app start, every 15s, when tab becomes visible, and when network comes back online
+
+### 6.1 Supabase Table (Optional, for user study logging)
+
+Run this SQL in Supabase:
+
+```sql
+create table if not exists public.chat_history (
+  message_id text primary key,
+  user_id text not null,
+  project_id text not null,
+  parent_id text null,
+  branch_id text null,
+  role text not null,
+  content text not null default '',
+  message_timestamp timestamptz not null,
+  captured_at timestamptz not null default now()
+);
+
+alter table public.chat_history enable row level security;
+
+create policy "allow anon insert chat history"
+on public.chat_history
+for insert
+to anon
+with check (true);
+```
+
+The app now stores every message in `localStorage` first and then upserts to Supabase when network/env is available.
 
 ## 7. Common Scripts
 

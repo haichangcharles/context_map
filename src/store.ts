@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createJSONStorage, persist, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, Node, Branch, ContextView, Pattern, Role } from './types';
 
@@ -54,6 +55,13 @@ const EXAMPLE_CONTEXT_ID = 'example-context';
 const EXAMPLE_BRANCH_RESEARCH = 'example-branch-research';
 const EXAMPLE_BRANCH_ARCH = 'example-branch-architecture';
 const EXAMPLE_BRANCH_UI = 'example-branch-ui';
+
+const shouldSeedExampleData = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const activeUserKey = 'context-map.active-user-id';
+  const userId = (window.localStorage.getItem(activeUserKey) || '').trim();
+  return userId === 'test';
+};
 
 const exampleNodes: Record<string, Node> = {
   'ex-n1': {
@@ -183,6 +191,35 @@ const exampleBranches: Record<string, Branch> = {
 };
 
 const MAX_STRUCTURE_HISTORY = 2;
+const STORE_PERSIST_KEY = 'context-map.app-state.v1';
+const ACTIVE_USER_KEY = 'context-map.active-user-id';
+const FALLBACK_USER_KEY = 'local-anonymous';
+
+const resolveUserScopedStoreKey = (baseKey: string): string => {
+  if (typeof window === 'undefined') return `${baseKey}:${FALLBACK_USER_KEY}`;
+  try {
+    const raw = (window.localStorage.getItem(ACTIVE_USER_KEY) || '').trim();
+    const user = raw || FALLBACK_USER_KEY;
+    return `${baseKey}:${user}`;
+  } catch {
+    return `${baseKey}:${FALLBACK_USER_KEY}`;
+  }
+};
+
+const userScopedStorage: StateStorage = {
+  getItem: (name) => {
+    if (typeof window === 'undefined') return null;
+    return window.localStorage.getItem(resolveUserScopedStoreKey(name));
+  },
+  setItem: (name, value) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(resolveUserScopedStoreKey(name), value);
+  },
+  removeItem: (name) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.removeItem(resolveUserScopedStoreKey(name));
+  },
+};
 
 const pickStructure = (state: AppState): StructureSnapshot => ({
   nodes: state.nodes,
@@ -268,39 +305,74 @@ const deriveParentBranchIdFromAnchor = (
   return anchorBranch.branch_id;
 };
 
-export const useAppStore = create<AppState>((set, get) => ({
-  projects: {
-    [EXAMPLE_PROJECT_ID]: {
-      project_id: EXAMPLE_PROJECT_ID,
-      title: 'Example Project - Mainline & Branches',
-      root_node_id: 'ex-n1',
-      mainline_id: `mainline_${EXAMPLE_PROJECT_ID}`,
-      active_context_id: EXAMPLE_CONTEXT_ID,
-    },
-  },
-  nodes: exampleNodes,
-  branches: exampleBranches,
-  mainlines: {
-    [EXAMPLE_PROJECT_ID]: ['ex-n1', 'ex-n2', 'ex-n3', 'ex-n4'],
-  },
-  contexts: {
-    [EXAMPLE_CONTEXT_ID]: {
-      context_id: EXAMPLE_CONTEXT_ID,
-      project_id: EXAMPLE_PROJECT_ID,
-      base_path: 'mainline',
-      included_nodes: [],
-      excluded_nodes: [],
-      active_pattern: null,
-    },
-  },
+const ensureNonEmptyMainline = (
+  projectId: string,
+  candidateMainline: string[],
+  nodesById: Record<string, Node>,
+  preferredNodeIds: string[]
+): { mainline: string[]; repairedNodeId: string | null } => {
+  if (candidateMainline.length > 0) {
+    return { mainline: candidateMainline, repairedNodeId: null };
+  }
+
+  const sortedProjectNodeIds = Object.values(nodesById)
+    .filter((n) => n.project_id === projectId)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .map((n) => n.node_id);
+  const fallbackNodeId =
+    [...preferredNodeIds, ...sortedProjectNodeIds].find((id) => !!id && nodesById[id]?.project_id === projectId) || null;
+
+  if (!fallbackNodeId) {
+    return { mainline: candidateMainline, repairedNodeId: null };
+  }
+
+  return { mainline: [fallbackNodeId], repairedNodeId: fallbackNodeId };
+};
+
+export const useAppStore = create<AppState>()(persist((set, get) => {
+  const seedExampleData = shouldSeedExampleData();
+
+  return {
+  projects: seedExampleData
+    ? {
+        [EXAMPLE_PROJECT_ID]: {
+          project_id: EXAMPLE_PROJECT_ID,
+          title: 'Example Project - Mainline & Branches',
+          root_node_id: 'ex-n1',
+          mainline_id: `mainline_${EXAMPLE_PROJECT_ID}`,
+          active_context_id: EXAMPLE_CONTEXT_ID,
+        },
+      }
+    : {},
+  nodes: seedExampleData ? exampleNodes : {},
+  branches: seedExampleData ? exampleBranches : {},
+  mainlines: seedExampleData
+    ? {
+        [EXAMPLE_PROJECT_ID]: ['ex-n1', 'ex-n2', 'ex-n3', 'ex-n4'],
+      }
+    : {},
+  contexts: seedExampleData
+    ? {
+        [EXAMPLE_CONTEXT_ID]: {
+          context_id: EXAMPLE_CONTEXT_ID,
+          project_id: EXAMPLE_PROJECT_ID,
+          base_path: 'mainline',
+          included_nodes: [],
+          excluded_nodes: [],
+          active_pattern: null,
+        },
+      }
+    : {},
   patterns: {},
   pastStructureSnapshots: [],
   futureStructureSnapshots: [],
-  naturalMainlines: {
-    [EXAMPLE_PROJECT_ID]: ['ex-n1', 'ex-n2', 'ex-n3', 'ex-n4'],
-  },
-  naturalBranches: exampleBranches,
-  activeProjectId: EXAMPLE_PROJECT_ID,
+  naturalMainlines: seedExampleData
+    ? {
+        [EXAMPLE_PROJECT_ID]: ['ex-n1', 'ex-n2', 'ex-n3', 'ex-n4'],
+      }
+    : {},
+  naturalBranches: seedExampleData ? exampleBranches : {},
+  activeProjectId: seedExampleData ? EXAMPLE_PROJECT_ID : null,
 
   createProject: (title) => {
     const projectId = uuidv4();
@@ -485,19 +557,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     const branchId = uuidv4();
 
     let movedCount = 0;
+    let rejectedBecauseStale = false;
 
     set((state) => {
       const project = state.projects[projectId];
       if (!project) return state;
       const context = state.contexts[project.active_context_id];
       if (!context) return state;
+      const expectedBranchId = context.base_path === 'mainline' ? null : context.base_path;
+      const dedupedMoveIds = Array.from(new Set(nodeIdsToMove));
+      const validatedMoveIds = dedupedMoveIds.filter((nodeId, index) => {
+        const node = state.nodes[nodeId];
+        if (!node || node.project_id !== projectId) return false;
+        if (node.branch_id !== expectedBranchId) return false;
+        if (index === 0) {
+          return node.parent_id === anchorNodeId;
+        }
+        const prevId = dedupedMoveIds[index - 1];
+        return node.parent_id === prevId;
+      });
+      if (validatedMoveIds.length !== dedupedMoveIds.length || validatedMoveIds.length === 0) {
+        rejectedBecauseStale = true;
+        return state;
+      }
       const parentBranchId = deriveParentBranchIdFromAnchor(state, projectId, anchorNodeId);
       const { intentSummary, parentContextTLDR } = deriveBranchMetadata(
         state,
         projectId,
         context,
         anchorNodeId,
-        nodeIdsToMove
+        validatedMoveIds
       );
       const newBranch: Branch = {
         branch_id: branchId,
@@ -513,9 +602,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const updatedNodes: Record<string, Node> = { ...state.nodes };
       const removalSet = new Set<string>();
-      const expectedFirstMovedNodeId = nodeIdsToMove[0] || null;
+      const expectedFirstMovedNodeId = validatedMoveIds[0] || null;
 
-      nodeIdsToMove.forEach((nodeId) => {
+      validatedMoveIds.forEach((nodeId) => {
         const node = updatedNodes[nodeId];
         if (!node || node.project_id !== projectId) return;
         removalSet.add(nodeId);
@@ -533,8 +622,31 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const currentMainline = state.mainlines[projectId] || [];
       const currentNaturalMainline = state.naturalMainlines[projectId] || [];
-      const nextMainline = currentMainline.filter((id) => !removalSet.has(id));
-      const nextNaturalMainline = currentNaturalMainline.filter((id) => !removalSet.has(id));
+      let nextMainline = currentMainline.filter((id) => !removalSet.has(id));
+      let nextNaturalMainline = currentNaturalMainline.filter((id) => !removalSet.has(id));
+
+      const repairedMainline = ensureNonEmptyMainline(projectId, nextMainline, updatedNodes, [anchorNodeId]);
+      if (repairedMainline.repairedNodeId) {
+        const repairedNodeId = repairedMainline.repairedNodeId;
+        const repairedNode = updatedNodes[repairedNodeId];
+        if (repairedNode) {
+          updatedNodes[repairedNodeId] = {
+            ...repairedNode,
+            branch_id: null,
+            parent_id: repairedNode.parent_id === repairedNodeId ? null : repairedNode.parent_id,
+          };
+        }
+        nextMainline = repairedMainline.mainline;
+        if (nextNaturalMainline.length === 0) {
+          nextNaturalMainline = [repairedNodeId];
+        }
+        console.warn('[mainline-repair] prevented empty mainline in acceptSuggestedBranch', {
+          projectId,
+          anchorNodeId,
+          repairedNodeId,
+          removalCount: removalSet.size,
+        });
+      }
 
       const updatedContext: ContextView = {
         ...context,
@@ -555,6 +667,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     });
 
+    if (rejectedBecauseStale) {
+      console.warn('[branch-accept] stale or invalid move list rejected', {
+        projectId,
+        anchorNodeId,
+        nodeIdsToMove,
+      });
+      return null;
+    }
     if (movedCount === 0) return null;
     return branchId;
   },
@@ -582,9 +702,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (anchorIndex !== -1) {
         newMainline = [...currentMainline.slice(0, anchorIndex + 1), ...currentNodes.map(n => n.node_id)];
       }
+      const repairedMainline = ensureNonEmptyMainline(projectId, newMainline, state.nodes, [
+        branch.anchor_node_id,
+        ...currentMainline,
+      ]);
+      newMainline = repairedMainline.mainline;
       const newMainlineSet = new Set(newMainline);
 
       const updatedNodes: Record<string, Node> = { ...state.nodes };
+      if (repairedMainline.repairedNodeId && updatedNodes[repairedMainline.repairedNodeId]) {
+        const repairedNode = updatedNodes[repairedMainline.repairedNodeId];
+        updatedNodes[repairedMainline.repairedNodeId] = {
+          ...repairedNode,
+          branch_id: null,
+        };
+        console.warn('[mainline-repair] prevented empty mainline in promoteBranch', {
+          projectId,
+          branchId,
+          repairedNodeId: repairedMainline.repairedNodeId,
+        });
+      }
       // Promoted path must become true mainline nodes.
       currentNodes.forEach((node) => {
         const existing = withNaturalOriginBranch(updatedNodes[node.node_id]);
@@ -846,11 +983,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       // User-selected endpoints are highest priority: mainline is exactly start->end path.
-      const newMainline = startToEnd;
+      const repairedMainline = ensureNonEmptyMainline(projectId, startToEnd, state.nodes, [startId, endId]);
+      const newMainline = repairedMainline.mainline;
       const newMainlineSet = new Set(newMainline);
 
       const updatedNodes: Record<string, Node> = { ...state.nodes };
       const updatedBranches: Record<string, Branch> = { ...state.branches };
+      if (repairedMainline.repairedNodeId && updatedNodes[repairedMainline.repairedNodeId]) {
+        const repairedNode = updatedNodes[repairedMainline.repairedNodeId];
+        updatedNodes[repairedMainline.repairedNodeId] = {
+          ...repairedNode,
+          branch_id: null,
+        };
+        console.warn('[mainline-repair] prevented empty mainline in setMainlineEndpoints', {
+          projectId,
+          startId,
+          endId,
+          repairedNodeId: repairedMainline.repairedNodeId,
+        });
+      }
 
       // Rule 1: nodes on new mainline are always mainline nodes.
       projectNodes.forEach((node) => {
@@ -973,7 +1124,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const pastStructureSnapshots = [...state.pastStructureSnapshots, snapshot].slice(-MAX_STRUCTURE_HISTORY);
 
       const naturalMainline = state.naturalMainlines[projectId] || [];
-      const naturalMainlineSet = new Set(naturalMainline);
+      const repairedNaturalMainline = ensureNonEmptyMainline(projectId, naturalMainline, state.nodes, naturalMainline);
+      const naturalMainlineSet = new Set(repairedNaturalMainline.mainline);
       const naturalBranchesForProject = Object.fromEntries(
         Object.entries(state.naturalBranches).filter(([, b]) => b.project_id === projectId)
       );
@@ -989,6 +1141,17 @@ export const useAppStore = create<AppState>((set, get) => ({
             branch_id: naturalMainlineSet.has(node.node_id) ? null : naturalOriginBranch,
           };
         });
+      if (repairedNaturalMainline.repairedNodeId && updatedNodes[repairedNaturalMainline.repairedNodeId]) {
+        const repairedNode = updatedNodes[repairedNaturalMainline.repairedNodeId];
+        updatedNodes[repairedNaturalMainline.repairedNodeId] = {
+          ...repairedNode,
+          branch_id: null,
+        };
+        console.warn('[mainline-repair] prevented empty mainline in resetStructureToNatural', {
+          projectId,
+          repairedNodeId: repairedNaturalMainline.repairedNodeId,
+        });
+      }
 
       const updatedBranches: Record<string, Branch> = {
         ...state.branches,
@@ -1007,7 +1170,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         futureStructureSnapshots: [],
         nodes: updatedNodes,
         branches: updatedBranches,
-        mainlines: { ...state.mainlines, [projectId]: naturalMainline },
+        mainlines: { ...state.mainlines, [projectId]: repairedNaturalMainline.mainline },
         contexts: {
           ...state.contexts,
           [context.context_id]: {
@@ -1020,4 +1183,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     });
   },
+};
+}, {
+  name: STORE_PERSIST_KEY,
+  storage: createJSONStorage(() => userScopedStorage),
+  partialize: (state) => ({
+    projects: state.projects,
+    nodes: state.nodes,
+    branches: state.branches,
+    mainlines: state.mainlines,
+    contexts: state.contexts,
+    patterns: state.patterns,
+    naturalMainlines: state.naturalMainlines,
+    naturalBranches: state.naturalBranches,
+    activeProjectId: state.activeProjectId,
+  }),
+  merge: (persistedState, currentState) => {
+    const persisted = persistedState as Partial<AppState>;
+    const merged = {
+      ...currentState,
+      ...persisted,
+      pastStructureSnapshots: [],
+      futureStructureSnapshots: [],
+    } as AppState;
+    if (!merged.activeProjectId || !merged.projects[merged.activeProjectId]) {
+      merged.activeProjectId = Object.keys(merged.projects)[0] || null;
+    }
+    return merged;
+  },
 }));
+
+export const rehydrateStoreForActiveUser = async () => {
+  useAppStore.setState(useAppStore.getInitialState(), true);
+  await useAppStore.persist.rehydrate();
+};

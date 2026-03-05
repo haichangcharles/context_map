@@ -11,6 +11,8 @@ import { useState, useEffect } from 'react';
 import { PanelRightClose, PanelRightOpen, Maximize2, Minimize2 } from 'lucide-react';
 import clsx from 'clsx';
 import { getActiveUserId, setActiveUserId } from './utils/branchFeedbackDataset';
+import { startChatHistorySync } from './services/chatHistory';
+import { rehydrateStoreForActiveUser } from './store';
 
 export default function App() {
   const isManageRoute = typeof window !== 'undefined' && window.location.pathname === '/manage';
@@ -31,6 +33,11 @@ export default function App() {
     if (previous) {
       setUserIdInput(previous);
     }
+  }, []);
+
+  useEffect(() => {
+    const stopSync = startChatHistorySync();
+    return stopSync;
   }, []);
 
   useEffect(() => {
@@ -61,11 +68,12 @@ export default function App() {
     };
   }, [isDragging]);
 
-  const handleConfirmUserId = (e: React.FormEvent) => {
+  const handleConfirmUserId = async (e: React.FormEvent) => {
     e.preventDefault();
     const normalized = userIdInput.trim();
     if (!normalized) return;
     setActiveUserId(normalized);
+    await rehydrateStoreForActiveUser();
     setActiveUserIdState(normalized);
   };
 

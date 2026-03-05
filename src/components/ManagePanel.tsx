@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   buildPersonaProfile,
   computeUserBranchStats,
@@ -12,6 +12,7 @@ import {
   setActiveUserId,
   setBranchDebugEnabled,
 } from '../utils/branchFeedbackDataset';
+import { readChatHistorySyncState } from '../services/chatHistory';
 
 export default function ManagePanel() {
   const [refreshTick, setRefreshTick] = useState(0);
@@ -21,6 +22,7 @@ export default function ManagePanel() {
   const [debugEnabled, setDebugEnabled] = useState(getBranchDebugEnabled());
 
   const activeUserId = getActiveUserId() || '';
+  const chatSync = readChatHistorySyncState();
   const users = useMemo(() => {
     const byUser = readAllBranchFeedbackByUser();
     const profiles = readAllPersonaProfiles();
@@ -38,6 +40,12 @@ export default function ManagePanel() {
     setDebugEnabled(getBranchDebugEnabled());
     setStatus('Refreshed.');
   };
+
+  useEffect(() => {
+    const onSyncUpdate = () => setRefreshTick((n) => n + 1);
+    window.addEventListener('chat-history-sync-updated', onSyncUpdate);
+    return () => window.removeEventListener('chat-history-sync-updated', onSyncUpdate);
+  }, []);
 
   const handleToggleDebug = (enabled: boolean) => {
     setBranchDebugEnabled(enabled);
@@ -159,6 +167,17 @@ export default function ManagePanel() {
             ) : (
               <div className="text-sm text-zinc-500">No user selected.</div>
             )}
+          </div>
+        </div>
+
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold mb-3">Chat Sync Status</h2>
+          <div className="text-sm space-y-1">
+            <div>pending_queue: {chatSync.pending_count}</div>
+            <div>last_attempt_at: {chatSync.last_attempt_at || 'N/A'}</div>
+            <div>last_success_at: {chatSync.last_success_at || 'N/A'}</div>
+            <div>last_error_at: {chatSync.last_error_at || 'N/A'}</div>
+            <div>last_error_message: {chatSync.last_error_message || 'None'}</div>
           </div>
         </div>
 

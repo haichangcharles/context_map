@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Node, Pattern } from '../types';
 import { BranchSuggestionDecision, parseBranchSuggestionDecision } from '../utils/branchSuggestion';
+import { appendDeltaWithinLimit } from './streamLimit';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -59,13 +60,20 @@ const callOpenAICompat = async (
 const callOpenAICompatStream = async (
   system: string,
   messages: AnthropicMessage[],
-  onDelta: (delta: string) => void
+  onDelta: (delta: string) => void,
+  options?: {
+    maxChars?: number;
+    signal?: AbortSignal;
+    onTruncated?: () => void;
+  }
 ): Promise<string> => {
   const { apiKey, baseUrl, model } = getOpenAICompatConfig();
   const payloadMessages = [{ role: 'system' as const, content: system }, ...messages];
+  let truncationEmitted = false;
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
+    signal: options?.signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
@@ -110,8 +118,18 @@ const callOpenAICompatStream = async (
       const payload = JSON.parse(dataStr);
       const deltaContent = payload?.choices?.[0]?.delta?.content;
       if (typeof deltaContent === 'string' && deltaContent.length > 0) {
-        fullText += deltaContent;
-        onDelta(deltaContent);
+        const limited = appendDeltaWithinLimit(fullText, deltaContent, options?.maxChars);
+        fullText = limited.nextText;
+        if (limited.acceptedDelta) {
+          onDelta(limited.acceptedDelta);
+        }
+        if (limited.truncated) {
+          if (!truncationEmitted) {
+            truncationEmitted = true;
+            options?.onTruncated?.();
+          }
+          return true;
+        }
       }
     } catch {
       // Ignore malformed chunks and continue parsing stream.
@@ -198,7 +216,12 @@ export const generateResponseStream = async (
   userMessage: string,
   activePattern: Pattern | null,
   onDelta: (delta: string) => void,
-  activeStepIndex?: number
+  activeStepIndex?: number,
+  options?: {
+    maxChars?: number;
+    signal?: AbortSignal;
+    onTruncated?: () => void;
+  }
 ): Promise<string> => {
   let fullSystemPrompt = systemPrompt;
   if (activePattern) {
@@ -215,7 +238,7 @@ export const generateResponseStream = async (
   });
 
   try {
-    return await callOpenAICompatStream(fullSystemPrompt, messages, onDelta);
+    return await callOpenAICompatStream(fullSystemPrompt, messages, onDelta, options);
   } catch (error) {
     console.error('Error streaming response:', error);
     throw error;

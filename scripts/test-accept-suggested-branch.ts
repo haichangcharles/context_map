@@ -57,6 +57,21 @@ const run = () => {
   assert.equal(state4.nodes[n5].branch_id, null, 'stale parent defensive node should remain mainline');
   assert.equal(state4.nodes[n5].parent_id, expectedParentForN5, 'stale branch parent should be corrected to mainline tail');
 
+  // Defensive case: even if stale payload tries to move all current mainline nodes,
+  // store should not allow an empty mainline.
+  const stateBeforeCorruptMove = useAppStore.getState();
+  const mainlineSnapshot = [...stateBeforeCorruptMove.mainlines[projectId]];
+  const forcedAnchor = mainlineSnapshot[0];
+  const forcedMoveIds = [...mainlineSnapshot];
+  assert.ok(forcedAnchor, 'defensive setup: expected non-empty mainline');
+  assert.ok(forcedMoveIds.length > 0, 'defensive setup: expected move ids');
+  useAppStore.getState().acceptSuggestedBranch(projectId, forcedAnchor, forcedMoveIds);
+  const stateAfterCorruptMove = useAppStore.getState();
+  assert.ok(
+    (stateAfterCorruptMove.mainlines[projectId] || []).length > 0,
+    'defensive: mainline should not become empty after acceptSuggestedBranch'
+  );
+
   console.log('Accept suggested branch flow passed.');
 };
 

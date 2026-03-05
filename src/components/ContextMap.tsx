@@ -355,10 +355,23 @@ export default function ContextMap() {
     const rawMainline = mainlines[project.project_id] || [];
     const validMainline = rawMainline.filter((id) => nodes[id]?.project_id === project.project_id);
     if (validMainline.length > 0) return validMainline;
-    return Object.values(nodes)
+    const fallbackMainline = Object.values(nodes)
       .filter((n) => n.project_id === project.project_id && n.branch_id === null)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
       .map((n) => n.node_id);
+    if (fallbackMainline.length > 0) return fallbackMainline;
+
+    const allProjectNodes = Object.values(nodes)
+      .filter((n) => n.project_id === project.project_id)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    if (allProjectNodes.length > 0) {
+      console.warn('[context-map] mainline fallback to earliest project node', {
+        projectId: project.project_id,
+        totalProjectNodes: allProjectNodes.length,
+      });
+      return [allProjectNodes[0].node_id];
+    }
+    return [];
   }, [project, mainlines, nodes]);
 
   const activeNodeIds = useMemo(() => {
@@ -388,6 +401,11 @@ export default function ContextMap() {
     return ids;
   }, [project, context, resolvedMainlineNodeIds, branches, nodes]);
 
+  const projectNodeCount = useMemo(() => {
+    if (!project) return 0;
+    return Object.values(nodes).filter((n) => n.project_id === project.project_id).length;
+  }, [project, nodes]);
+
   useEffect(() => {
     if (!project || !context) return;
 
@@ -403,6 +421,13 @@ export default function ContextMap() {
     const projectBranches = Object.values(branches).filter((branch) => branch.project_id === project.project_id);
     const projectBranchIds = new Set(projectBranches.map((branch) => branch.branch_id));
     const projectNodes = Object.values(nodes).filter((n) => n.project_id === project.project_id);
+
+    if (projectNodes.length > 0 && mainlineNodeIds.length === 0) {
+      console.warn('[context-map] project has nodes but resolved mainline is empty', {
+        projectId: project.project_id,
+        projectNodeCount: projectNodes.length,
+      });
+    }
 
     const orphanNodesByBranchId = new Map<string, Node[]>();
     projectNodes.forEach((node) => {
@@ -657,6 +682,26 @@ export default function ContextMap() {
     }
   }, [flowNodes.length, rfInstance]); // Only trigger when node count changes
 
+  useEffect(() => {
+    if (!rfInstance || !project || !context || flowNodes.length === 0) return;
+    window.requestAnimationFrame(() => {
+      rfInstance.fitView({ duration: 250, padding: 0.12 });
+    });
+  }, [rfInstance, project?.project_id, context?.base_path]);
+
+  useEffect(() => {
+    if (!rfInstance || !project) return;
+    if (projectNodeCount === 0 || flowNodes.length > 0) return;
+    console.warn('[context-map] map appears empty while project has nodes; triggering recovery fit', {
+      projectId: project.project_id,
+      projectNodeCount,
+    });
+    setLayoutRefreshToken((n) => n + 1);
+    window.requestAnimationFrame(() => {
+      rfInstance.fitView({ duration: 300, padding: 0.15 });
+    });
+  }, [rfInstance, project, projectNodeCount, flowNodes.length]);
+
   // Auto fit view on resize
   useEffect(() => {
     if (!rfInstance || !containerRef.current) return;
@@ -867,6 +912,18 @@ export default function ContextMap() {
             <Maximize2 size={13} />
             Fit
           </button>
+          {projectNodeCount > 0 && flowNodes.length === 0 && (
+            <button
+              onClick={() => {
+                setLayoutRefreshToken((n) => n + 1);
+                handleFitAll();
+              }}
+              className="text-xs text-amber-700 px-2 py-1 rounded-md border border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors"
+              title="Recover map rendering"
+            >
+              Recover Map
+            </button>
+          )}
         </div>
 
         {/* Floating Batch Action Bar */}
