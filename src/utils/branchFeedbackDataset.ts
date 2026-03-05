@@ -194,6 +194,11 @@ export const logBranchDebug = (event: string, payload: unknown) => {
   console.log(`[branch-debug] ${event}`, payload);
 };
 
+export const logContextMapDebug = (event: string, payload: unknown) => {
+  if (!getBranchDebugEnabled()) return;
+  console.log(`[context-map-debug] ${event}`, payload);
+};
+
 const tokenize = (text: string): string[] => {
   const normalized = (text || '').toLowerCase().replace(/\s+/g, '');
   const grams: string[] = [];

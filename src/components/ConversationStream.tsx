@@ -323,6 +323,42 @@ export default function ConversationStream() {
   const allEffectiveNodes = [...new Set([...effectiveNodes, ...includedExtraNodes])]
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
+  const buildSuggestionSnapshot = () => {
+    const state = useAppStore.getState();
+    const liveProject = state.projects[project.project_id];
+    const liveContext = liveProject ? state.contexts[liveProject.active_context_id] : null;
+    if (!liveContext) return null;
+
+    const projectNodes = Object.values(state.nodes)
+      .filter((n) => n.project_id === project.project_id)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const rawMainline = state.mainlines[project.project_id] || [];
+    const validMainline = rawMainline.filter((id) => state.nodes[id]?.project_id === project.project_id);
+    const fallbackMainline = projectNodes.filter((n) => n.branch_id === null).map((n) => n.node_id);
+    const resolvedMainline = validMainline.length > 0
+      ? validMainline
+      : fallbackMainline.length > 0
+        ? fallbackMainline
+        : (projectNodes[0] ? [projectNodes[0].node_id] : []);
+    const visibleForBasePath = resolveVisibleNodesForBasePath(
+      liveContext.base_path,
+      state.branches,
+      state.nodes,
+      resolvedMainline
+    );
+
+    return {
+      projectId: project.project_id,
+      basePath: liveContext.base_path,
+      projectNodeCount: projectNodes.length,
+      mainlineLength: rawMainline.length,
+      validMainlineLength: validMainline.length,
+      resolvedMainlineLength: resolvedMainline.length,
+      visibleNodeCount: visibleForBasePath.length,
+      latestNodeIds: projectNodes.slice(-5).map((n) => n.node_id),
+    };
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
@@ -567,6 +603,7 @@ export default function ConversationStream() {
         const activeContextId = state.projects[project.project_id]?.active_context_id;
         const activeContext = activeContextId ? state.contexts[activeContextId] : null;
         if (activeContext?.base_path === (liveContext?.base_path ?? 'mainline')) {
+          logBranchDebug('suggestion-pre-snapshot', buildSuggestionSnapshot());
           setPendingBranchSuggestion({
             anchorNodeId: parentId,
             reason: branchDecision.reason || 'This looks like a temporary or off-topic subtask.',
@@ -579,6 +616,7 @@ export default function ConversationStream() {
             nodeIdsToMove: [userNodeId, assistantNodeId],
             reason: branchDecision.reason || '',
           });
+          logBranchDebug('suggestion-post-snapshot', buildSuggestionSnapshot());
         }
       }
       setIsLoading(false);

@@ -6,7 +6,7 @@ import { Node, Branch } from '../types';
 import clsx from 'clsx';
 import { Layers, Eye, EyeOff, GitBranch, MousePointerSquareDashed, WandSparkles, Undo2, Redo2, RotateCcw, Maximize2, History } from 'lucide-react';
 import dagre from 'dagre';
-import { buildQAPair, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
+import { buildQAPair, logBranchDebug, logContextMapDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 
 // Custom Node Component
 const CustomNode = ({ data }: { data: any }) => {
@@ -445,6 +445,27 @@ export default function ContextMap() {
     return Object.values(nodes).filter((n) => n.project_id === project.project_id).length;
   }, [project, nodes]);
 
+  const getViewportSnapshot = useCallback(() => {
+    if (!rfInstance) return null;
+    try {
+      const viewport = rfInstance.getViewport?.();
+      const rfNodes = rfInstance.getNodes?.();
+      const rfNodesCount = Array.isArray(rfNodes) ? rfNodes.length : 0;
+      return {
+        viewport: viewport
+          ? {
+              x: viewport.x,
+              y: viewport.y,
+              zoom: viewport.zoom,
+            }
+          : null,
+        rfNodesCount,
+      };
+    } catch {
+      return null;
+    }
+  }, [rfInstance]);
+
   useEffect(() => {
     if (!project || !context) return;
 
@@ -729,6 +750,27 @@ export default function ContextMap() {
       });
     });
 
+    logContextMapDebug('layout-start', {
+      projectId: project.project_id,
+      basePath: context.base_path,
+      projectNodeCount: projectNodes.length,
+      mainlineNodeCount: mainlineNodeIds.length,
+      branchGroupCount: projectBranchGroups.length,
+      initialNodesCount: initialNodes.length,
+      initialEdgesCount: initialEdges.length,
+      layoutMode,
+      structureChanged,
+    });
+    const startViewport = getViewportSnapshot();
+    if (startViewport) {
+      logContextMapDebug('viewport-snapshot', {
+        phase: 'layout-start',
+        projectId: project.project_id,
+        basePath: context.base_path,
+        ...startViewport,
+      });
+    }
+
     let layoutSuccess = false;
     try {
       const { nodes: dagreNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, initialEdges, 'TB');
@@ -736,6 +778,28 @@ export default function ContextMap() {
         layoutMode === 'tree'
           ? dagreNodes
           : getStructuredPositions(dagreNodes, mainlineNodeIds, projectBranchGroups, branchSideById, layoutMode);
+
+      logContextMapDebug('layout-result', {
+        projectId: project.project_id,
+        basePath: context.base_path,
+        projectNodeCount: projectNodes.length,
+        mainlineNodeCount: mainlineNodeIds.length,
+        branchGroupCount: projectBranchGroups.length,
+        initialNodesCount: initialNodes.length,
+        initialEdgesCount: initialEdges.length,
+        structuredNodesCount: structuredNodes.length,
+        layoutMode,
+        structureChanged,
+      });
+      const resultViewport = getViewportSnapshot();
+      if (resultViewport) {
+        logContextMapDebug('viewport-snapshot', {
+          phase: 'layout-result',
+          projectId: project.project_id,
+          basePath: context.base_path,
+          ...resultViewport,
+        });
+      }
 
       if (structuredNodes.length === 0 && initialNodes.length > 0) {
         console.warn('[context-map] layout produced 0 nodes from', initialNodes.length, 'initial nodes; skipping update');
@@ -746,7 +810,7 @@ export default function ContextMap() {
             return prevNodes;
           }
           const prevNodeById = new Map(prevNodes.map((n) => [n.id, n]));
-          return structuredNodes.map((node) => {
+          const nextNodes = structuredNodes.map((node) => {
             const prev = prevNodeById.get(node.id);
             const keepTreePosition = layoutMode === 'tree' && !modeChanged && !relayoutRequested && !structureChanged;
             return {
@@ -755,6 +819,30 @@ export default function ContextMap() {
               selected: prev ? !!prev.selected : false,
             };
           });
+          logContextMapDebug('flow-commit', {
+            projectId: project.project_id,
+            basePath: context.base_path,
+            projectNodeCount: projectNodes.length,
+            mainlineNodeCount: mainlineNodeIds.length,
+            branchGroupCount: projectBranchGroups.length,
+            initialNodesCount: initialNodes.length,
+            initialEdgesCount: initialEdges.length,
+            structuredNodesCount: structuredNodes.length,
+            layoutMode,
+            structureChanged,
+            prevFlowNodesCount: prevNodes.length,
+            nextFlowNodesCount: nextNodes.length,
+          });
+          const commitViewport = getViewportSnapshot();
+          if (commitViewport) {
+            logContextMapDebug('viewport-snapshot', {
+              phase: 'flow-commit',
+              projectId: project.project_id,
+              basePath: context.base_path,
+              ...commitViewport,
+            });
+          }
+          return nextNodes;
         });
         setFlowEdges(layoutedEdges);
         layoutSuccess = true;
