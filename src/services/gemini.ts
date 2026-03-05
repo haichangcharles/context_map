@@ -2,21 +2,11 @@
 import { Node, Pattern } from '../types';
 import { BranchSuggestionDecision, parseBranchSuggestionDecision } from '../utils/branchSuggestion';
 import { appendDeltaWithinLimit } from './streamLimit';
+import { getModelProviderPreference, getOpenAIModelOverride } from './modelProvider';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
   content: string;
-};
-
-const getOpenAICompatConfig = () => {
-  const apiKey = process.env.SILICONFLOW_API_KEY || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error('SILICONFLOW_API_KEY is not set');
-  }
-
-  const baseUrl = (process.env.SILICONFLOW_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.siliconflow.cn/v1').replace(/\/+$/, '');
-  const model = process.env.DEEPSEEK_MODEL || 'deepseek-ai/DeepSeek-V3.2';
-  return { apiKey, baseUrl, model };
 };
 
 const mapNodesToMessages = (contextNodes: Node[]): AnthropicMessage[] =>
@@ -30,17 +20,16 @@ const callOpenAICompat = async (
   messages: AnthropicMessage[],
   responseFormat?: { type: 'json_object' }
 ): Promise<string> => {
-  const { apiKey, baseUrl, model } = getOpenAICompatConfig();
   const payloadMessages = [{ role: 'system' as const, content: system }, ...messages];
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetch('/api/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      'x-model-provider': getModelProviderPreference(),
+      'x-openai-model': getOpenAIModelOverride(),
     },
     body: JSON.stringify({
-      model,
       messages: payloadMessages,
       max_tokens: 4096,
       ...(responseFormat ? { response_format: responseFormat } : {}),
@@ -67,19 +56,18 @@ const callOpenAICompatStream = async (
     onTruncated?: () => void;
   }
 ): Promise<string> => {
-  const { apiKey, baseUrl, model } = getOpenAICompatConfig();
   const payloadMessages = [{ role: 'system' as const, content: system }, ...messages];
   let truncationEmitted = false;
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetch('/api/chat/completions', {
     method: 'POST',
     signal: options?.signal,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      'x-model-provider': getModelProviderPreference(),
+      'x-openai-model': getOpenAIModelOverride(),
     },
     body: JSON.stringify({
-      model,
       messages: payloadMessages,
       max_tokens: 4096,
       stream: true,

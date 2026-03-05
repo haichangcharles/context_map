@@ -13,6 +13,13 @@ import {
   setBranchDebugEnabled,
 } from '../utils/branchFeedbackDataset';
 import { readChatHistorySyncState } from '../services/chatHistory';
+import {
+  getModelProviderPreference,
+  getOpenAIModelOverride,
+  setModelProviderPreference,
+  setOpenAIModelOverride,
+  type ModelProviderPreference,
+} from '../services/modelProvider';
 
 export default function ManagePanel() {
   const [refreshTick, setRefreshTick] = useState(0);
@@ -20,6 +27,8 @@ export default function ManagePanel() {
   const [profileJson, setProfileJson] = useState('');
   const [status, setStatus] = useState('');
   const [debugEnabled, setDebugEnabled] = useState(getBranchDebugEnabled());
+  const [providerPreference, setProviderPreferenceState] = useState<ModelProviderPreference>(getModelProviderPreference());
+  const [openAIModelInput, setOpenAIModelInput] = useState(getOpenAIModelOverride());
 
   const activeUserId = getActiveUserId() || '';
   const chatSync = readChatHistorySyncState();
@@ -51,6 +60,18 @@ export default function ManagePanel() {
     setBranchDebugEnabled(enabled);
     setDebugEnabled(enabled);
     setStatus(`Console debug ${enabled ? 'enabled' : 'disabled'}.`);
+  };
+
+  const handleProviderPreferenceChange = (value: ModelProviderPreference) => {
+    setModelProviderPreference(value);
+    setProviderPreferenceState(value);
+    setStatus(`Model provider set to ${value}.`);
+  };
+
+  const handleSaveOpenAIModel = () => {
+    setOpenAIModelOverride(openAIModelInput);
+    setOpenAIModelInput(getOpenAIModelOverride());
+    setStatus(`OpenAI model override ${openAIModelInput.trim() ? 'updated' : 'cleared'}.`);
   };
 
   const handleSwitchActiveUser = () => {
@@ -135,6 +156,35 @@ export default function ManagePanel() {
             />
             Console Debug
           </label>
+          <div className="min-w-[220px]">
+            <label className="block text-xs text-zinc-500 mb-1">Model Provider</label>
+            <select
+              value={providerPreference}
+              onChange={(e) => handleProviderPreferenceChange(e.target.value as ModelProviderPreference)}
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 bg-white text-sm"
+            >
+              <option value="auto">Auto (SiliconFlow -&gt; OpenAI)</option>
+              <option value="siliconflow">SiliconFlow only</option>
+              <option value="openai">OpenAI only</option>
+            </select>
+          </div>
+          <div className="min-w-[280px]">
+            <label className="block text-xs text-zinc-500 mb-1">OpenAI Model Override</label>
+            <div className="flex items-center gap-2">
+              <input
+                value={openAIModelInput}
+                onChange={(e) => setOpenAIModelInput(e.target.value)}
+                placeholder="e.g. gpt-4o-mini"
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 bg-white text-sm"
+              />
+              <button
+                onClick={handleSaveOpenAIModel}
+                className="px-3 py-2 rounded-lg border border-zinc-300 bg-white text-sm"
+              >
+                Save
+              </button>
+            </div>
+          </div>
           <div className="text-xs text-zinc-500 ml-auto">
             Active user: <span className="font-medium text-zinc-700">{activeUserId || 'N/A'}</span>
           </div>

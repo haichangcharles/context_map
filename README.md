@@ -63,14 +63,18 @@ Default app URL: `http://localhost:3000`
 Configure `.env.local` (see [.env.example](.env.example)):
 
 ```bash
-# Required (at least one API key path)
-ANTHROPIC_API_KEY=...
-ANTHROPIC_BASE_URL=https://api.siliconflow.cn/v1
-DEEPSEEK_MODEL=deepseek-ai/DeepSeek-V3.2
-
-# Optional OpenAI-compatible path
+# Required (server-side only, do NOT use VITE_ prefix)
 SILICONFLOW_API_KEY=...
 SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+DEEPSEEK_MODEL=deepseek-ai/DeepSeek-V3.2
+
+# Backup provider
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+OPENAI_MODEL=deepseek-ai/DeepSeek-V3.2
+
+# Optional default provider (auto/siliconflow/openai)
+DEFAULT_MODEL_PROVIDER=auto
 
 # Optional search provider
 TAVILY_API_KEY=...
@@ -81,8 +85,10 @@ VITE_SUPABASE_ANON_KEY=...
 ```
 
 Notes:
-- The app checks `SILICONFLOW_API_KEY` first, then falls back to `ANTHROPIC_API_KEY`
-- If `DEEPSEEK_MODEL` is not set, the default is `deepseek-ai/DeepSeek-V3.2`
+- In `auto` mode, the app checks `SILICONFLOW_API_KEY` first, then falls back to `OPENAI_API_KEY`
+- You can switch provider at runtime in `/manage` (Auto / SiliconFlow / OpenAI)
+- You can set OpenAI model override at runtime in `/manage` (stored in browser localStorage)
+- Model API keys are used only in serverless API (`/api/chat/completions`), not exposed in frontend bundle
 - If Supabase env vars are not provided, chat history is still stored locally and queued for later sync
 - App state (`projects/nodes/branches/context`) is persisted in browser `localStorage` (`context-map.app-state.v1`)
 - Chat history local keys: `context-map.chat-history.by-user.v1`, `context-map.chat-history.pending-sync.v1`
@@ -125,6 +131,9 @@ npm run preview        # preview build output
 npm run lint           # TypeScript check
 npm run test:mainline  # mainline endpoint and structure regression tests
 ```
+
+For Vercel deployment, set the model env vars in Vercel Project Settings -> Environment Variables.
+To run serverless `/api/chat/completions` locally, use `vercel dev`.
 
 ## 8. Status and Roadmap
 
