@@ -5,7 +5,7 @@ import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Save, CheckC
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import { generateResponseStream, generateMainlineSummary, extractPattern, detectBranchSuggestion } from '../services/gemini';
-import { appendBranchFeedbackSample, buildQAPair, QAPair } from '../utils/branchFeedbackDataset';
+import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 
 type PendingBranchSuggestion = {
   anchorNodeId: string;
@@ -31,6 +31,59 @@ const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): 
   return chain.reverse();
 };
 
+const resolveVisibleNodesForBasePath = (
+  basePath: string,
+  branchesById: Record<string, Branch>,
+  nodesById: Record<string, Node>,
+  resolvedMainlineIds: string[]
+): Node[] => {
+  if (basePath === 'mainline') {
+    return resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
+  }
+
+  const currentBranch = branchesById[basePath];
+  if (!currentBranch) {
+    return resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
+  }
+
+  const branchChainIds = getBranchChainIds(currentBranch.branch_id, branchesById);
+  const rootBranchId = branchChainIds[0];
+  const rootBranch = rootBranchId ? branchesById[rootBranchId] : null;
+  const anchorIndex = rootBranch ? resolvedMainlineIds.indexOf(rootBranch.anchor_node_id) : -1;
+  const baseNodes = anchorIndex !== -1
+    ? resolvedMainlineIds.slice(0, anchorIndex + 1).map((id) => nodesById[id]).filter(Boolean)
+    : resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
+
+  const allNodes = Object.values(nodesById);
+  const threadedBranchNodes: Node[] = [];
+
+  branchChainIds.forEach((branchId, idx) => {
+    const segmentNodes = allNodes
+      .filter((n) => n.branch_id === branchId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const nextBranchId = branchChainIds[idx + 1];
+    if (!nextBranchId) {
+      threadedBranchNodes.push(...segmentNodes);
+      return;
+    }
+
+    const nextAnchorNodeId = branchesById[nextBranchId]?.anchor_node_id;
+    const cutoffIndex = nextAnchorNodeId ? segmentNodes.findIndex((n) => n.node_id === nextAnchorNodeId) : -1;
+    if (cutoffIndex === -1) {
+      threadedBranchNodes.push(...segmentNodes);
+      return;
+    }
+
+    // Child branch starts from this anchor, so parent branch should only show prefix up to anchor.
+    threadedBranchNodes.push(...segmentNodes.slice(0, cutoffIndex + 1));
+  });
+
+  const dedup = new Map<string, Node>();
+  [...baseNodes, ...threadedBranchNodes].forEach((n) => dedup.set(n.node_id, n));
+  return Array.from(dedup.values());
+};
+
 const summarizeRecent = (items: string[], max = 160): string => {
   const merged = items
     .map((s) => s.replace(/\s+/g, ' ').trim())
@@ -38,6 +91,11 @@ const summarizeRecent = (items: string[], max = 160): string => {
     .slice(-2)
     .join(' | ');
   return merged.slice(0, max);
+};
+
+const getCurrentLevel = (isMainline: boolean, currentBranch: Branch | null, allBranches: Record<string, Branch>): number => {
+  if (isMainline || !currentBranch) return 1;
+  return getBranchChainIds(currentBranch.branch_id, allBranches).length + 1;
 };
 
 const buildQAPairsFromOrderedNodes = (orderedNodes: Node[]): QAPair[] => {
@@ -167,26 +225,12 @@ export default function ConversationStream() {
   if (isMainline) {
     visibleNodes = resolvedMainlineNodeIds.map(id => nodes[id]).filter(Boolean);
   } else if (currentBranch) {
-    const branchChainIds = getBranchChainIds(currentBranch.branch_id, branches);
-    const rootBranchId = branchChainIds[0];
-    const rootBranch = rootBranchId ? branches[rootBranchId] : null;
-
-    const anchorIndex = rootBranch ? resolvedMainlineNodeIds.indexOf(rootBranch.anchor_node_id) : -1;
-    const baseNodes = anchorIndex !== -1
-      ? resolvedMainlineNodeIds.slice(0, anchorIndex + 1).map(id => nodes[id]).filter(Boolean)
-      : resolvedMainlineNodeIds.map(id => nodes[id]).filter(Boolean);
-
-    const chainNodes = branchChainIds.flatMap((branchId) =>
-      Object.values(nodes)
-        .filter((n) => n.branch_id === branchId)
-        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    visibleNodes = resolveVisibleNodesForBasePath(
+      currentBranch.branch_id,
+      branches,
+      nodes,
+      resolvedMainlineNodeIds
     );
-
-    const dedupById = new Map<string, Node>();
-    [...baseNodes, ...chainNodes].forEach((node) => {
-      dedupById.set(node.node_id, node);
-    });
-    visibleNodes = Array.from(dedupById.values());
   }
 
   const effectiveNodes = visibleNodes.filter(n => !context.excluded_nodes.includes(n.node_id));
@@ -207,13 +251,20 @@ export default function ConversationStream() {
         ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
         : summarizeRecent(visibleNodes.map((n) => n.content), 160);
 
+      const ignoreLevel = getCurrentLevel(isMainline, currentBranch, branches);
       appendBranchFeedbackSample({
         current_tldr: currentTLDR,
         history_last_3_qa: historyPairs,
         current_node: buildQAPair(movedUser, movedAssistant),
+        level: ignoreLevel,
         user_behaviour: 'same_thread',
         behaviour_source: 'ignore_branch',
         time: new Date().toISOString(),
+      });
+      logBranchDebug('dataset-append', {
+        source: 'ignore_branch',
+        userBehaviour: 'same_thread',
+        level: ignoreLevel,
       });
       setPendingBranchSuggestion(null);
     }
@@ -225,6 +276,20 @@ export default function ConversationStream() {
     const stateBeforeSend = useAppStore.getState();
     const liveProject = stateBeforeSend.projects[project.project_id];
     const liveContext = liveProject ? stateBeforeSend.contexts[liveProject.active_context_id] : null;
+    if (liveContext) {
+      const pendingCommitted = consumePendingBranchFeedback(liveContext.base_path);
+      if (pendingCommitted) {
+        appendBranchFeedbackSample(pendingCommitted);
+        logBranchDebug('dataset-append', {
+          source: pendingCommitted.behaviour_source,
+          userBehaviour: pendingCommitted.user_behaviour,
+          level: pendingCommitted.level,
+          commitMode: 'on-first-message',
+          basePath: liveContext.base_path,
+        });
+      }
+    }
+
     const liveIsMainline = liveContext?.base_path === 'mainline';
     const liveBranch = !liveIsMainline && liveContext ? stateBeforeSend.branches[liveContext.base_path] : null;
     const liveRawMainline = stateBeforeSend.mainlines[project.project_id] || [];
@@ -235,31 +300,14 @@ export default function ConversationStream() {
       .map((n) => n.node_id);
     const liveResolvedMainline = liveValidMainline.length > 0 ? liveValidMainline : liveFallbackMainline;
 
-    const liveVisibleNodes: Node[] = liveIsMainline
-      ? liveResolvedMainline.map((id) => stateBeforeSend.nodes[id]).filter(Boolean)
-      : liveBranch
-      ? (() => {
-          const branchChainIds = getBranchChainIds(liveBranch.branch_id, stateBeforeSend.branches);
-          const rootBranchId = branchChainIds[0];
-          const rootBranch = rootBranchId ? stateBeforeSend.branches[rootBranchId] : null;
-          const anchorIndex = rootBranch ? liveResolvedMainline.indexOf(rootBranch.anchor_node_id) : -1;
-          const baseNodes = anchorIndex !== -1
-            ? liveResolvedMainline.slice(0, anchorIndex + 1).map((id) => stateBeforeSend.nodes[id]).filter(Boolean)
-            : liveResolvedMainline.map((id) => stateBeforeSend.nodes[id]).filter(Boolean);
-
-          const chainNodes = branchChainIds.flatMap((branchId) =>
-            Object.values(stateBeforeSend.nodes)
-              .filter((n) => n.branch_id === branchId)
-              .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-          );
-
-          const dedupById = new Map<string, Node>();
-          [...baseNodes, ...chainNodes].forEach((node) => {
-            dedupById.set(node.node_id, node);
-          });
-          return Array.from(dedupById.values());
-        })()
-      : [];
+    const liveVisibleNodes: Node[] = !liveContext
+      ? []
+      : resolveVisibleNodesForBasePath(
+          liveContext.base_path,
+          stateBeforeSend.branches,
+          stateBeforeSend.nodes,
+          liveResolvedMainline
+        );
 
     const liveBranchChainIds = liveBranch ? getBranchChainIds(liveBranch.branch_id, stateBeforeSend.branches) : [];
     const liveBranchDepth = liveBranchChainIds.length;
@@ -290,9 +338,15 @@ export default function ConversationStream() {
 
     const parentId = liveVisibleNodes.length > 0 ? liveVisibleNodes[liveVisibleNodes.length - 1].node_id : null;
     const branchId = liveIsMainline ? null : liveBranch?.branch_id || null;
-    const shouldDetectBranch = !!parentId;
+    const firstCurrentBranchNodeId = liveBranch
+      ? Object.values(stateBeforeSend.nodes)
+          .filter((n) => n.branch_id === liveBranch.branch_id)
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())[0]?.node_id || null
+      : null;
+    const isAtBranchFirstNode = !!liveBranch && !!parentId && parentId === firstCurrentBranchNodeId;
+    const shouldDetectBranch = !!parentId && !isAtBranchFirstNode;
 
-    console.debug('[send-context]', {
+    logBranchDebug('send-context', {
       projectId: project.project_id,
       basePath: liveContext?.base_path ?? 'unknown',
       parentId,
@@ -302,6 +356,7 @@ export default function ConversationStream() {
       branchDepth: liveBranchDepth,
       totalBranchCount,
       activeBranchCount,
+      isAtBranchFirstNode,
     });
 
     const branchDetectionPromise = shouldDetectBranch
@@ -383,6 +438,13 @@ export default function ConversationStream() {
       repairMainlineIfNeeded();
     } finally {
       const branchDecision = await branchDetectionPromise;
+      logBranchDebug('branch-decision', {
+        shouldBranch: branchDecision?.shouldBranch ?? false,
+        confidence: branchDecision?.confidence ?? 0,
+        reason: branchDecision?.reason ?? '',
+        basePath: liveContext?.base_path ?? 'unknown',
+        parentId,
+      });
       if (branchDecision?.shouldBranch && parentId) {
         const state = useAppStore.getState();
         const activeContextId = state.projects[project.project_id]?.active_context_id;
@@ -393,6 +455,12 @@ export default function ConversationStream() {
             reason: branchDecision.reason || 'This looks like a temporary or off-topic subtask.',
             nodeIdsToMove: [userNodeId, assistantNodeId],
             originBasePath: activeContext.base_path,
+          });
+          logBranchDebug('suggestion-created', {
+            anchorNodeId: parentId,
+            originBasePath: activeContext.base_path,
+            nodeIdsToMove: [userNodeId, assistantNodeId],
+            reason: branchDecision.reason || '',
           });
         }
       }
@@ -414,15 +482,25 @@ export default function ConversationStream() {
       ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
       : summarizeRecent(visibleNodes.map((n) => n.content), 160);
 
-    appendBranchFeedbackSample({
+    const manualLevel = getCurrentLevel(isMainline, currentBranch, branches);
+    const manualSample = {
       current_tldr: currentTLDR,
       history_last_3_qa: historyPairs,
       current_node: currentPair,
+      level: manualLevel,
       user_behaviour: 'branch',
       behaviour_source: 'manually_branch',
-      time: new Date().toISOString(),
+    } as const;
+    logBranchDebug('dataset-pending', {
+      source: 'manually_branch',
+      userBehaviour: 'branch',
+      level: manualLevel,
+      nodeId,
     });
-    createBranch(project.project_id, nodeId);
+    const createdBranchId = createBranch(project.project_id, nodeId);
+    if (createdBranchId) {
+      setPendingBranchFeedback(createdBranchId, manualSample);
+    }
   };
 
   const handleAcceptBranchSuggestion = () => {
@@ -434,13 +512,19 @@ export default function ConversationStream() {
       ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
       : summarizeRecent(visibleNodes.map((n) => n.content), 160);
 
-    appendBranchFeedbackSample({
+    const acceptLevel = getCurrentLevel(isMainline, currentBranch, branches);
+    const acceptSample = {
       current_tldr: currentTLDR,
       history_last_3_qa: historyPairs,
       current_node: buildQAPair(movedUser, movedAssistant),
+      level: acceptLevel,
       user_behaviour: 'branch',
       behaviour_source: 'accept_branch',
-      time: new Date().toISOString(),
+    } as const;
+    logBranchDebug('dataset-pending', {
+      source: 'accept_branch',
+      userBehaviour: 'branch',
+      level: acceptLevel,
     });
 
     const createdBranchId = acceptSuggestedBranch(
@@ -453,6 +537,8 @@ export default function ConversationStream() {
         projectId: project.project_id,
         anchorNodeId: pendingBranchSuggestion.anchorNodeId,
       });
+    } else {
+      setPendingBranchFeedback(createdBranchId, acceptSample);
     }
     setPendingBranchSuggestion(null);
   };
@@ -466,13 +552,20 @@ export default function ConversationStream() {
       ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
       : summarizeRecent(visibleNodes.map((n) => n.content), 160);
 
+    const rejectLevel = getCurrentLevel(isMainline, currentBranch, branches);
     appendBranchFeedbackSample({
       current_tldr: currentTLDR,
       history_last_3_qa: historyPairs,
       current_node: buildQAPair(movedUser, movedAssistant),
+      level: rejectLevel,
       user_behaviour: 'same_thread',
       behaviour_source: 'reject_branch',
       time: new Date().toISOString(),
+    });
+    logBranchDebug('dataset-append', {
+      source: 'reject_branch',
+      userBehaviour: 'same_thread',
+      level: rejectLevel,
     });
     setPendingBranchSuggestion(null);
   };

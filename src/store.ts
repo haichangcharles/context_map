@@ -255,6 +255,19 @@ const deriveBranchMetadata = (
   };
 };
 
+const deriveParentBranchIdFromAnchor = (
+  state: AppState,
+  projectId: string,
+  anchorNodeId: string
+): string | null => {
+  const anchorNode = state.nodes[anchorNodeId];
+  if (!anchorNode || anchorNode.project_id !== projectId) return null;
+  if (!anchorNode.branch_id) return null;
+  const anchorBranch = state.branches[anchorNode.branch_id];
+  if (!anchorBranch || anchorBranch.project_id !== projectId) return null;
+  return anchorBranch.branch_id;
+};
+
 export const useAppStore = create<AppState>((set, get) => ({
   projects: {
     [EXAMPLE_PROJECT_ID]: {
@@ -433,7 +446,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!project) return state;
       const context = state.contexts[project.active_context_id];
       if (!context) return state;
-      const parentBranchId = context.base_path === 'mainline' ? null : context.base_path;
+      const parentBranchId = deriveParentBranchIdFromAnchor(state, projectId, anchorNodeId);
       const { intentSummary, parentContextTLDR } = deriveBranchMetadata(state, projectId, context, anchorNodeId);
       const newBranch: Branch = {
         branch_id: branchId,
@@ -478,7 +491,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!project) return state;
       const context = state.contexts[project.active_context_id];
       if (!context) return state;
-      const parentBranchId = context.base_path === 'mainline' ? null : context.base_path;
+      const parentBranchId = deriveParentBranchIdFromAnchor(state, projectId, anchorNodeId);
       const { intentSummary, parentContextTLDR } = deriveBranchMetadata(
         state,
         projectId,

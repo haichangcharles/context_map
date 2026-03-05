@@ -6,6 +6,7 @@ import { Node, Branch } from '../types';
 import clsx from 'clsx';
 import { Layers, Eye, EyeOff, GitBranch, MousePointerSquareDashed, WandSparkles, Undo2, Redo2, RotateCcw, Maximize2, History } from 'lucide-react';
 import dagre from 'dagre';
+import { buildQAPair, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 
 // Custom Node Component
 const CustomNode = ({ data }: { data: any }) => {
@@ -74,6 +75,86 @@ const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): 
   }
 
   return chain.reverse();
+};
+
+const summarizeRecent = (items: string[], max = 160): string => {
+  const merged = items
+    .map((s) => s.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(-2)
+    .join(' | ');
+  return merged.slice(0, max);
+};
+
+const buildQAPairsFromOrderedNodes = (orderedNodes: Node[]): QAPair[] => {
+  const byParent = new Map<string, Node[]>();
+  orderedNodes.forEach((node) => {
+    if (!node.parent_id) return;
+    if (!byParent.has(node.parent_id)) byParent.set(node.parent_id, []);
+    byParent.get(node.parent_id)!.push(node);
+  });
+
+  return orderedNodes
+    .filter((n) => n.role === 'user')
+    .map((userNode) => {
+      const assistantChild = (byParent.get(userNode.node_id) || []).find((n) => n.role === 'assistant');
+      return buildQAPair(userNode, assistantChild || null);
+    })
+    .filter((pair) => pair.user || pair.assistant);
+};
+
+const getCurrentLevel = (isMainline: boolean, currentBranch: Branch | null, allBranches: Record<string, Branch>): number => {
+  if (isMainline || !currentBranch) return 1;
+  return getBranchChainIds(currentBranch.branch_id, allBranches).length + 1;
+};
+
+const resolveVisibleNodesForBasePath = (
+  basePath: string,
+  branchesById: Record<string, Branch>,
+  nodesById: Record<string, Node>,
+  resolvedMainlineIds: string[]
+): Node[] => {
+  if (basePath === 'mainline') {
+    return resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
+  }
+
+  const currentBranch = branchesById[basePath];
+  if (!currentBranch) {
+    return resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
+  }
+
+  const branchChainIds = getBranchChainIds(currentBranch.branch_id, branchesById);
+  const rootBranchId = branchChainIds[0];
+  const rootBranch = rootBranchId ? branchesById[rootBranchId] : null;
+  const anchorIndex = rootBranch ? resolvedMainlineIds.indexOf(rootBranch.anchor_node_id) : -1;
+  const baseNodes = anchorIndex !== -1
+    ? resolvedMainlineIds.slice(0, anchorIndex + 1).map((id) => nodesById[id]).filter(Boolean)
+    : resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
+
+  const allNodes = Object.values(nodesById);
+  const threadedBranchNodes: Node[] = [];
+
+  branchChainIds.forEach((branchId, idx) => {
+    const segmentNodes = allNodes
+      .filter((n) => n.branch_id === branchId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const nextBranchId = branchChainIds[idx + 1];
+    if (!nextBranchId) {
+      threadedBranchNodes.push(...segmentNodes);
+      return;
+    }
+    const nextAnchorNodeId = branchesById[nextBranchId]?.anchor_node_id;
+    const cutoffIndex = nextAnchorNodeId ? segmentNodes.findIndex((n) => n.node_id === nextAnchorNodeId) : -1;
+    if (cutoffIndex === -1) {
+      threadedBranchNodes.push(...segmentNodes);
+      return;
+    }
+    threadedBranchNodes.push(...segmentNodes.slice(0, cutoffIndex + 1));
+  });
+
+  const dedup = new Map<string, Node>();
+  [...baseNodes, ...threadedBranchNodes].forEach((n) => dedup.set(n.node_id, n));
+  return Array.from(dedup.values());
 };
 
 const getLayoutedElements = (nodes: FlowNode[], edges: Edge[], direction = 'TB') => {
@@ -264,6 +345,8 @@ export default function ContextMap() {
 
   const project = activeProjectId ? projects[activeProjectId] : null;
   const context = project ? contexts[project.active_context_id] : null;
+  const isMainline = context?.base_path === 'mainline';
+  const currentBranch = !isMainline && context ? branches[context.base_path] : null;
 
   const onPaneClick = useCallback(() => setContextMenu(null), []);
 
@@ -634,6 +717,52 @@ export default function ContextMap() {
     });
   }, [rfInstance]);
 
+  const getVisibleNodesForBasePath = useCallback((basePath: string): Node[] => {
+    return resolveVisibleNodesForBasePath(basePath, branches, nodes, resolvedMainlineNodeIds);
+  }, [branches, nodes, resolvedMainlineNodeIds]);
+
+  const handleManualRebranchFromMap = useCallback((nodeId: string) => {
+    if (!project || !context) return;
+    const anchorNode = nodes[nodeId];
+    const sourceBasePath = anchorNode?.branch_id || 'mainline';
+    const sourceBranch = anchorNode?.branch_id ? branches[anchorNode.branch_id] : null;
+    const sourceIsMainline = sourceBasePath === 'mainline';
+    const visibleNodes = getVisibleNodesForBasePath(sourceBasePath);
+    let currentPair = buildQAPair(anchorNode, null);
+    if (anchorNode?.role === 'assistant' && anchorNode.parent_id) {
+      currentPair = buildQAPair(nodes[anchorNode.parent_id], anchorNode);
+    } else if (anchorNode?.role === 'user') {
+      const assistantChild = Object.values(nodes).find((n) => n.parent_id === anchorNode.node_id && n.role === 'assistant');
+      currentPair = buildQAPair(anchorNode, assistantChild || null);
+    }
+    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
+    const currentTLDR = !sourceIsMainline && sourceBranch
+      ? sourceBranch.intent_summary || sourceBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
+      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+    const level = getCurrentLevel(sourceIsMainline, sourceBranch || null, branches);
+
+    const manualSample = {
+      current_tldr: currentTLDR,
+      history_last_3_qa: historyPairs,
+      current_node: currentPair,
+      level,
+      user_behaviour: 'branch',
+      behaviour_source: 'manually_branch',
+    } as const;
+    logBranchDebug('dataset-pending', {
+      source: 'manually_branch',
+      from: 'context-map',
+      userBehaviour: 'branch',
+      level,
+      nodeId,
+      sourceBasePath,
+    });
+    const createdBranchId = createBranch(project.project_id, nodeId);
+    if (createdBranchId) {
+      setPendingBranchFeedback(createdBranchId, manualSample);
+    }
+  }, [project, context, nodes, branches, createBranch, getVisibleNodesForBasePath]);
+
   if (!project) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-400 bg-zinc-50">
@@ -816,7 +945,7 @@ export default function ContextMap() {
             <button
               className="w-full text-left px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100"
               onClick={() => {
-                createBranch(project.project_id, contextMenu.nodeId);
+                handleManualRebranchFromMap(contextMenu.nodeId);
                 setContextMenu(null);
               }}
             >

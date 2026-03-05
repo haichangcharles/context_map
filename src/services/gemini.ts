@@ -310,13 +310,16 @@ export const detectBranchSuggestion = async (
 
     const totalBranchCount = detectionContext?.totalBranchCount ?? 0;
     const branchDepth = detectionContext?.branchDepth ?? 0;
-    const hasExistingBranchLoad = totalBranchCount >= 1;
+    const currentMode = detectionContext?.currentMode ?? 'mainline';
+    const hasHighBranchLoad = totalBranchCount >= 4;
     const cautiousThreshold =
-      branchDepth >= 2
-        ? 0.82
-        : hasExistingBranchLoad
+      currentMode === 'mainline'
+        ? 0.5
+        : branchDepth >= 3
+        ? 0.8
+        : hasHighBranchLoad
         ? 0.72
-        : 0.5;
+        : 0.62;
 
     if (decision.confidence < cautiousThreshold) {
       return {
