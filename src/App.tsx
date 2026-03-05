@@ -30,9 +30,12 @@ export default function App() {
 
   useEffect(() => {
     const previous = getActiveUserId();
-    if (previous) {
-      setUserIdInput(previous);
-    }
+    if (!previous) return;
+    const normalized = previous.trim();
+    if (!normalized) return;
+    setUserIdInput(normalized);
+    setActiveUserIdState(normalized);
+    void rehydrateStoreForActiveUser();
   }, []);
 
   useEffect(() => {
