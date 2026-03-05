@@ -13,6 +13,7 @@ import clsx from 'clsx';
 import { getActiveUserId, setActiveUserId } from './utils/branchFeedbackDataset';
 import { startChatHistorySync } from './services/chatHistory';
 import { rehydrateStoreForActiveUser } from './store';
+import { Analytics } from '@vercel/analytics/react';
 
 export default function App() {
   const isManageRoute = typeof window !== 'undefined' && window.location.pathname === '/manage';
@@ -209,6 +210,7 @@ export default function App() {
           )}
         </div>
       )}
+      <Analytics />
     </div>
   );
 }
