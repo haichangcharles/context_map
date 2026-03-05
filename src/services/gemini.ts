@@ -253,7 +253,17 @@ export const extractPattern = async (contextNodes: Node[]): Promise<{ name: stri
 
 export const detectBranchSuggestion = async (
   linearContextNodes: Node[],
-  userMessage: string
+  userMessage: string,
+  detectionContext?: {
+    currentMode: 'mainline' | 'branch';
+    branchDepth: number;
+    currentBranchIntent?: string;
+    parentContextTLDR?: string;
+    mainlineTLDR?: string;
+    totalBranchCount?: number;
+    activeBranchCount?: number;
+    recentBranchIntents?: string[];
+  }
 ): Promise<BranchSuggestionDecision> => {
   const messages = mapNodesToMessages(linearContextNodes);
   messages.push({
@@ -261,15 +271,62 @@ export const detectBranchSuggestion = async (
     content: userMessage,
   });
 
+  const contextLines = [
+    `Current mode: ${detectionContext?.currentMode || 'mainline'}.`,
+    `Branch depth: ${detectionContext?.branchDepth ?? 0}.`,
+    detectionContext?.currentBranchIntent
+      ? `Current branch intent: ${detectionContext.currentBranchIntent}`
+      : '',
+    detectionContext?.parentContextTLDR ? `Parent context TLDR: ${detectionContext.parentContextTLDR}` : '',
+    detectionContext?.mainlineTLDR ? `Mainline TLDR: ${detectionContext.mainlineTLDR}` : '',
+    typeof detectionContext?.totalBranchCount === 'number'
+      ? `Total branches in project: ${detectionContext.totalBranchCount}.`
+      : '',
+    typeof detectionContext?.activeBranchCount === 'number'
+      ? `Active branches: ${detectionContext.activeBranchCount}.`
+      : '',
+    detectionContext?.recentBranchIntents?.length
+      ? `Recent branch intents: ${detectionContext.recentBranchIntents.join(' || ')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
   const systemPrompt =
     'You decide whether the latest user message should open a new conversation branch from the previous message in a linear chat. ' +
-    'Branch-worthy examples: temporary one-off Q&A, clearly off-topic requests (e.g., weather), or obvious subtasks detached from the current main objective. ' +
+    'Primary criterion: compare message against CURRENT branch topic first; only secondarily consider parent/mainline context. ' +
+    'Use cognitive workload awareness: when branches already exist, avoid creating new branches casually. ' +
+    'If a message fits an existing off-topic/side-thread style, prefer staying in current thread over opening another branch. ' +
+    'Branch-worthy examples: temporary one-off Q&A, clearly off-topic requests (e.g., weather), or obvious subtasks detached from the current branch objective. ' +
+    'If branch depth is higher (>=2), be more conservative and avoid creating new branches unless confidence is clearly high. ' +
+    (contextLines ? `\n\nExecution context:\n${contextLines}\n` : '') +
     'Return strict JSON only with shape: {"should_branch":boolean,"confidence":number,"reason":"short reason"}. ' +
     'Set confidence in [0,1].';
 
   try {
     const result = await callOpenAICompat(systemPrompt, messages, { type: 'json_object' });
-    return parseBranchSuggestionDecision(result);
+    const decision = parseBranchSuggestionDecision(result);
+    if (!decision.shouldBranch) return decision;
+
+    const totalBranchCount = detectionContext?.totalBranchCount ?? 0;
+    const branchDepth = detectionContext?.branchDepth ?? 0;
+    const hasExistingBranchLoad = totalBranchCount >= 1;
+    const cautiousThreshold =
+      branchDepth >= 2
+        ? 0.82
+        : hasExistingBranchLoad
+        ? 0.72
+        : 0.5;
+
+    if (decision.confidence < cautiousThreshold) {
+      return {
+        shouldBranch: false,
+        confidence: decision.confidence,
+        reason: decision.reason || 'Below cautious threshold under current branch workload.',
+      };
+    }
+
+    return decision;
   } catch (error) {
     console.error('Error detecting branch suggestion:', error);
     return {

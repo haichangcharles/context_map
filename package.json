@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit",
     "test:mainline": "tsx scripts/test-mainline-endpoints.ts",
     "test:branch-suggestion": "tsx scripts/test-branch-suggestion.ts",
-    "test:accept-branch": "tsx scripts/test-accept-suggested-branch.ts"
+    "test:accept-branch": "tsx scripts/test-accept-suggested-branch.ts",
+    "test:nested-branch": "tsx scripts/test-nested-branch.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

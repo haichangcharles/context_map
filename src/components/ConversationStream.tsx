@@ -5,17 +5,62 @@ import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Save, CheckC
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import { generateResponseStream, generateMainlineSummary, extractPattern, detectBranchSuggestion } from '../services/gemini';
+import { appendBranchFeedbackSample, buildQAPair, QAPair } from '../utils/branchFeedbackDataset';
 
 type PendingBranchSuggestion = {
   anchorNodeId: string;
   reason: string;
   nodeIdsToMove: string[];
+  originBasePath: string;
+};
+
+const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): string[] => {
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = branchId;
+
+  while (cursor) {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    const branch = branches[cursor];
+    if (!branch) break;
+    chain.push(branch.branch_id);
+    cursor = branch.parent_branch_id;
+  }
+
+  return chain.reverse();
+};
+
+const summarizeRecent = (items: string[], max = 160): string => {
+  const merged = items
+    .map((s) => s.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(-2)
+    .join(' | ');
+  return merged.slice(0, max);
+};
+
+const buildQAPairsFromOrderedNodes = (orderedNodes: Node[]): QAPair[] => {
+  const byParent = new Map<string, Node[]>();
+  orderedNodes.forEach((node) => {
+    if (!node.parent_id) return;
+    if (!byParent.has(node.parent_id)) byParent.set(node.parent_id, []);
+    byParent.get(node.parent_id)!.push(node);
+  });
+
+  return orderedNodes
+    .filter((n) => n.role === 'user')
+    .map((userNode) => {
+      const assistantChild = (byParent.get(userNode.node_id) || []).find((n) => n.role === 'assistant');
+      return buildQAPair(userNode, assistantChild || null);
+    })
+    .filter((pair) => pair.user || pair.assistant);
 };
 
 export default function ConversationStream() {
   const { 
     projects, activeProjectId, nodes, branches, mainlines, contexts, patterns,
-    addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, toggleNodeInclusion,
+    addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, returnToParentBranch, toggleNodeInclusion,
     updateBranchSummary, createPattern, setActivePattern, setActiveStep, batchToggleInclusion, updateNodeContent
   } = useAppStore();
   
@@ -87,10 +132,11 @@ export default function ConversationStream() {
   const currentBranch = !isMainline ? branches[context.base_path] : null;
 
   useEffect(() => {
-    if (!isMainline && pendingBranchSuggestion) {
+    if (!pendingBranchSuggestion) return;
+    if (context.base_path !== pendingBranchSuggestion.originBasePath) {
       setPendingBranchSuggestion(null);
     }
-  }, [isMainline, pendingBranchSuggestion]);
+  }, [context.base_path, pendingBranchSuggestion]);
 
   const rawMainlineNodeIds = mainlines[project.project_id] || [];
   const validMainlineNodeIds = rawMainlineNodeIds.filter((id) => nodes[id]?.project_id === project.project_id);
@@ -121,16 +167,26 @@ export default function ConversationStream() {
   if (isMainline) {
     visibleNodes = resolvedMainlineNodeIds.map(id => nodes[id]).filter(Boolean);
   } else if (currentBranch) {
-    const anchorIndex = resolvedMainlineNodeIds.indexOf(currentBranch.anchor_node_id);
-    const baseNodes = anchorIndex !== -1 
-      ? resolvedMainlineNodeIds.slice(0, anchorIndex + 1).map(id => nodes[id])
-      : [];
-    
-    const branchNodes = Object.values(nodes)
-      .filter(n => n.branch_id === currentBranch.branch_id)
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      
-    visibleNodes = [...baseNodes, ...branchNodes].filter(Boolean);
+    const branchChainIds = getBranchChainIds(currentBranch.branch_id, branches);
+    const rootBranchId = branchChainIds[0];
+    const rootBranch = rootBranchId ? branches[rootBranchId] : null;
+
+    const anchorIndex = rootBranch ? resolvedMainlineNodeIds.indexOf(rootBranch.anchor_node_id) : -1;
+    const baseNodes = anchorIndex !== -1
+      ? resolvedMainlineNodeIds.slice(0, anchorIndex + 1).map(id => nodes[id]).filter(Boolean)
+      : resolvedMainlineNodeIds.map(id => nodes[id]).filter(Boolean);
+
+    const chainNodes = branchChainIds.flatMap((branchId) =>
+      Object.values(nodes)
+        .filter((n) => n.branch_id === branchId)
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    );
+
+    const dedupById = new Map<string, Node>();
+    [...baseNodes, ...chainNodes].forEach((node) => {
+      dedupById.set(node.node_id, node);
+    });
+    visibleNodes = Array.from(dedupById.values());
   }
 
   const effectiveNodes = visibleNodes.filter(n => !context.excluded_nodes.includes(n.node_id));
@@ -144,6 +200,21 @@ export default function ConversationStream() {
     if (!input.trim() || isLoading) return;
 
     if (pendingBranchSuggestion) {
+      const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
+      const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
+      const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
+      const currentTLDR = !isMainline && currentBranch
+        ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
+        : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+
+      appendBranchFeedbackSample({
+        current_tldr: currentTLDR,
+        history_last_3_qa: historyPairs,
+        current_node: buildQAPair(movedUser, movedAssistant),
+        user_behaviour: 'same_thread',
+        behaviour_source: 'ignore_branch',
+        time: new Date().toISOString(),
+      });
       setPendingBranchSuggestion(null);
     }
 
@@ -167,22 +238,59 @@ export default function ConversationStream() {
     const liveVisibleNodes: Node[] = liveIsMainline
       ? liveResolvedMainline.map((id) => stateBeforeSend.nodes[id]).filter(Boolean)
       : liveBranch
-      ? [
-          ...(() => {
-            const anchorIndex = liveResolvedMainline.indexOf(liveBranch.anchor_node_id);
-            return anchorIndex !== -1
-              ? liveResolvedMainline.slice(0, anchorIndex + 1).map((id) => stateBeforeSend.nodes[id]).filter(Boolean)
-              : [];
-          })(),
-          ...Object.values(stateBeforeSend.nodes)
-            .filter((n) => n.branch_id === liveBranch.branch_id)
-            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-        ]
+      ? (() => {
+          const branchChainIds = getBranchChainIds(liveBranch.branch_id, stateBeforeSend.branches);
+          const rootBranchId = branchChainIds[0];
+          const rootBranch = rootBranchId ? stateBeforeSend.branches[rootBranchId] : null;
+          const anchorIndex = rootBranch ? liveResolvedMainline.indexOf(rootBranch.anchor_node_id) : -1;
+          const baseNodes = anchorIndex !== -1
+            ? liveResolvedMainline.slice(0, anchorIndex + 1).map((id) => stateBeforeSend.nodes[id]).filter(Boolean)
+            : liveResolvedMainline.map((id) => stateBeforeSend.nodes[id]).filter(Boolean);
+
+          const chainNodes = branchChainIds.flatMap((branchId) =>
+            Object.values(stateBeforeSend.nodes)
+              .filter((n) => n.branch_id === branchId)
+              .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+          );
+
+          const dedupById = new Map<string, Node>();
+          [...baseNodes, ...chainNodes].forEach((node) => {
+            dedupById.set(node.node_id, node);
+          });
+          return Array.from(dedupById.values());
+        })()
       : [];
+
+    const liveBranchChainIds = liveBranch ? getBranchChainIds(liveBranch.branch_id, stateBeforeSend.branches) : [];
+    const liveBranchDepth = liveBranchChainIds.length;
+    const projectBranches = Object.values(stateBeforeSend.branches).filter((b) => b.project_id === project.project_id);
+    const totalBranchCount = projectBranches.length;
+    const activeBranchCount = projectBranches.filter((b) => b.status === 'active').length;
+    const recentBranchIntents = projectBranches
+      .sort((a, b) => {
+        const aAnchorTs = stateBeforeSend.nodes[a.anchor_node_id]?.timestamp || '';
+        const bAnchorTs = stateBeforeSend.nodes[b.anchor_node_id]?.timestamp || '';
+        return new Date(bAnchorTs).getTime() - new Date(aAnchorTs).getTime();
+      })
+      .map((b) => b.intent_summary || b.mainline_summary || stateBeforeSend.nodes[b.anchor_node_id]?.content || '')
+      .filter(Boolean)
+      .slice(0, 3);
+    const mainlineNodes = liveResolvedMainline.map((id) => stateBeforeSend.nodes[id]).filter(Boolean);
+    const mainlineTLDR = summarizeRecent(mainlineNodes.map((n) => n.content), 180);
+    const currentBranchIntent = liveBranch?.intent_summary || summarizeRecent(liveVisibleNodes.map((n) => n.content), 140);
+    const parentContextTLDR =
+      liveBranch?.parent_context_tldr ||
+      (liveBranchDepth >= 2
+        ? (() => {
+            const parentId = liveBranch.parent_branch_id;
+            const parentBranch = parentId ? stateBeforeSend.branches[parentId] : null;
+            return parentBranch?.intent_summary || parentBranch?.mainline_summary || '';
+          })()
+        : mainlineTLDR);
 
     const parentId = liveVisibleNodes.length > 0 ? liveVisibleNodes[liveVisibleNodes.length - 1].node_id : null;
     const branchId = liveIsMainline ? null : liveBranch?.branch_id || null;
-    const shouldDetectBranch = !!liveIsMainline && !!parentId;
+    const shouldDetectBranch = !!parentId;
 
     console.debug('[send-context]', {
       projectId: project.project_id,
@@ -191,10 +299,22 @@ export default function ConversationStream() {
       parentBranchId: parentId ? stateBeforeSend.nodes[parentId]?.branch_id ?? null : null,
       branchId,
       visibleCount: liveVisibleNodes.length,
+      branchDepth: liveBranchDepth,
+      totalBranchCount,
+      activeBranchCount,
     });
 
     const branchDetectionPromise = shouldDetectBranch
-      ? detectBranchSuggestion(liveVisibleNodes, userMsg)
+      ? detectBranchSuggestion(liveVisibleNodes, userMsg, {
+          currentMode: liveIsMainline ? 'mainline' : 'branch',
+          branchDepth: liveBranchDepth,
+          currentBranchIntent,
+          parentContextTLDR,
+          mainlineTLDR,
+          totalBranchCount,
+          activeBranchCount,
+          recentBranchIntents,
+        })
       : Promise.resolve(null);
 
     const userNodeId = addNode(project.project_id, parentId, 'user', userMsg, branchId);
@@ -267,11 +387,12 @@ export default function ConversationStream() {
         const state = useAppStore.getState();
         const activeContextId = state.projects[project.project_id]?.active_context_id;
         const activeContext = activeContextId ? state.contexts[activeContextId] : null;
-        if (activeContext?.base_path === 'mainline') {
+        if (activeContext?.base_path === (liveContext?.base_path ?? 'mainline')) {
           setPendingBranchSuggestion({
             anchorNodeId: parentId,
             reason: branchDecision.reason || 'This looks like a temporary or off-topic subtask.',
             nodeIdsToMove: [userNodeId, assistantNodeId],
+            originBasePath: activeContext.base_path,
           });
         }
       }
@@ -280,11 +401,48 @@ export default function ConversationStream() {
   };
 
   const handleReBranch = (nodeId: string) => {
+    const anchorNode = nodes[nodeId];
+    let currentPair = buildQAPair(anchorNode, null);
+    if (anchorNode?.role === 'assistant' && anchorNode.parent_id) {
+      currentPair = buildQAPair(nodes[anchorNode.parent_id], anchorNode);
+    } else if (anchorNode?.role === 'user') {
+      const assistantChild = Object.values(nodes).find((n) => n.parent_id === anchorNode.node_id && n.role === 'assistant');
+      currentPair = buildQAPair(anchorNode, assistantChild || null);
+    }
+    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
+    const currentTLDR = !isMainline && currentBranch
+      ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
+      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+
+    appendBranchFeedbackSample({
+      current_tldr: currentTLDR,
+      history_last_3_qa: historyPairs,
+      current_node: currentPair,
+      user_behaviour: 'branch',
+      behaviour_source: 'manually_branch',
+      time: new Date().toISOString(),
+    });
     createBranch(project.project_id, nodeId);
   };
 
   const handleAcceptBranchSuggestion = () => {
     if (!pendingBranchSuggestion) return;
+    const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
+    const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
+    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
+    const currentTLDR = !isMainline && currentBranch
+      ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
+      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+
+    appendBranchFeedbackSample({
+      current_tldr: currentTLDR,
+      history_last_3_qa: historyPairs,
+      current_node: buildQAPair(movedUser, movedAssistant),
+      user_behaviour: 'branch',
+      behaviour_source: 'accept_branch',
+      time: new Date().toISOString(),
+    });
+
     const createdBranchId = acceptSuggestedBranch(
       project.project_id,
       pendingBranchSuggestion.anchorNodeId,
@@ -296,6 +454,26 @@ export default function ConversationStream() {
         anchorNodeId: pendingBranchSuggestion.anchorNodeId,
       });
     }
+    setPendingBranchSuggestion(null);
+  };
+
+  const handleRejectBranchSuggestion = () => {
+    if (!pendingBranchSuggestion) return;
+    const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
+    const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
+    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
+    const currentTLDR = !isMainline && currentBranch
+      ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
+      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+
+    appendBranchFeedbackSample({
+      current_tldr: currentTLDR,
+      history_last_3_qa: historyPairs,
+      current_node: buildQAPair(movedUser, movedAssistant),
+      user_behaviour: 'same_thread',
+      behaviour_source: 'reject_branch',
+      time: new Date().toISOString(),
+    });
     setPendingBranchSuggestion(null);
   };
 
@@ -373,6 +551,15 @@ export default function ConversationStream() {
               <CornerUpLeft size={14} />
               Return to Mainline
             </button>
+            {currentBranch.parent_branch_id && (
+              <button
+                onClick={() => returnToParentBranch(project.project_id)}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-white border border-indigo-200 hover:bg-indigo-50 rounded-md transition-colors"
+              >
+                <CornerUpLeft size={14} />
+                Return to Parent
+              </button>
+            )}
             <button
               onClick={() => promoteBranch(project.project_id, currentBranch.branch_id)}
               className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
@@ -433,7 +620,6 @@ export default function ConversationStream() {
             const isSelected = selectedNodeIds.has(node.node_id);
             const inlineSuggestionTargetNodeId = pendingBranchSuggestion?.nodeIdsToMove[1];
             const showInlineSuggestion =
-              isMainline &&
               !!pendingBranchSuggestion &&
               node.role === 'assistant' &&
               inlineSuggestionTargetNodeId === node.node_id;
@@ -506,7 +692,7 @@ export default function ConversationStream() {
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button
-                          onClick={() => setPendingBranchSuggestion(null)}
+                          onClick={handleRejectBranchSuggestion}
                           className="px-3 py-1.5 rounded-md text-xs font-medium text-zinc-700 bg-white border border-zinc-300 hover:bg-zinc-100 transition-colors"
                         >
                           Reject

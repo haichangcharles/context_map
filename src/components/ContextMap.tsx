@@ -59,6 +59,23 @@ type LayoutMode = 'tree' | 'mindmap' | 'timeline';
 type BranchSide = 'left' | 'right';
 type BranchGroup = { branch: Branch; branchNodes: Node[] };
 
+const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): string[] => {
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = branchId;
+
+  while (cursor) {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    const branch = branches[cursor];
+    if (!branch) break;
+    chain.push(branch.branch_id);
+    cursor = branch.parent_branch_id;
+  }
+
+  return chain.reverse();
+};
+
 const getLayoutedElements = (nodes: FlowNode[], edges: Edge[], direction = 'TB') => {
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
@@ -270,13 +287,20 @@ export default function ContextMap() {
     if (isMainline) {
       resolvedMainlineNodeIds.forEach(id => ids.add(id));
     } else if (currentBranch) {
-      const anchorIndex = resolvedMainlineNodeIds.indexOf(currentBranch.anchor_node_id);
+      const branchChainIds = getBranchChainIds(currentBranch.branch_id, branches);
+      const rootBranchId = branchChainIds[0];
+      const rootBranch = rootBranchId ? branches[rootBranchId] : null;
+      const anchorIndex = rootBranch ? resolvedMainlineNodeIds.indexOf(rootBranch.anchor_node_id) : -1;
       if (anchorIndex !== -1) {
         resolvedMainlineNodeIds.slice(0, anchorIndex + 1).forEach(id => ids.add(id));
+      } else {
+        resolvedMainlineNodeIds.forEach(id => ids.add(id));
       }
-      Object.values(nodes)
-        .filter(n => n.branch_id === currentBranch.branch_id)
-        .forEach(n => ids.add(n.node_id));
+      branchChainIds.forEach((branchId) => {
+        Object.values(nodes)
+          .filter((n) => n.branch_id === branchId)
+          .forEach((n) => ids.add(n.node_id));
+      });
     }
     return ids;
   }, [project, context, resolvedMainlineNodeIds, branches, nodes]);
@@ -327,6 +351,7 @@ export default function ContextMap() {
         branch_id: branchId,
         project_id: project.project_id,
         anchor_node_id: anchorNodeId,
+        parent_branch_id: null,
         status: 'active',
       };
     });

@@ -34,6 +34,7 @@ interface AppState {
   acceptSuggestedBranch: (projectId: string, anchorNodeId: string, nodeIdsToMove: string[]) => string | null;
   promoteBranch: (projectId: string, branchId: string) => void;
   returnToMainline: (projectId: string) => void;
+  returnToParentBranch: (projectId: string) => void;
   toggleNodeInclusion: (projectId: string, nodeId: string) => void;
   setActivePattern: (projectId: string, patternId: string | null) => void;
   
@@ -162,18 +163,21 @@ const exampleBranches: Record<string, Branch> = {
     branch_id: EXAMPLE_BRANCH_RESEARCH,
     project_id: EXAMPLE_PROJECT_ID,
     anchor_node_id: 'ex-n2',
+    parent_branch_id: null,
     status: 'active',
   },
   [EXAMPLE_BRANCH_ARCH]: {
     branch_id: EXAMPLE_BRANCH_ARCH,
     project_id: EXAMPLE_PROJECT_ID,
     anchor_node_id: 'ex-n3',
+    parent_branch_id: null,
     status: 'active',
   },
   [EXAMPLE_BRANCH_UI]: {
     branch_id: EXAMPLE_BRANCH_UI,
     project_id: EXAMPLE_PROJECT_ID,
     anchor_node_id: 'ex-n1',
+    parent_branch_id: null,
     status: 'active',
   },
 };
@@ -195,6 +199,59 @@ const withNaturalOriginBranch = (node: Node): Node => {
       ...node.metadata,
       natural_origin_branch_id: node.branch_id ?? null,
     },
+  };
+};
+
+const compactText = (text: string, max = 140): string =>
+  text.replace(/\s+/g, ' ').trim().slice(0, max);
+
+const deriveTailSummary = (nodes: Node[]): string => {
+  if (nodes.length === 0) return '';
+  const tail = nodes.slice(-2).map((n) => compactText(n.content, 80)).filter(Boolean);
+  return tail.join(' | ');
+};
+
+const deriveBranchMetadata = (
+  state: AppState,
+  projectId: string,
+  context: ContextView,
+  anchorNodeId: string,
+  movedNodeIds: string[] = []
+): { intentSummary: string; parentContextTLDR: string } => {
+  const anchorNode = state.nodes[anchorNodeId];
+  const movedNodes = movedNodeIds
+    .map((id) => state.nodes[id])
+    .filter((n): n is Node => !!n && n.project_id === projectId)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  const intentSource =
+    movedNodes.find((n) => n.role === 'user')?.content ||
+    movedNodes[0]?.content ||
+    anchorNode?.content ||
+    'Follow-up subtask';
+
+  if (context.base_path === 'mainline') {
+    const mainlineIds = state.mainlines[projectId] || [];
+    const mainlineNodes = mainlineIds.map((id) => state.nodes[id]).filter((n): n is Node => !!n);
+    const mainlineTail = deriveTailSummary(mainlineNodes);
+    return {
+      intentSummary: compactText(intentSource, 120),
+      parentContextTLDR: mainlineTail ? `Mainline TLDR: ${mainlineTail}` : 'Mainline TLDR: continuing primary objective.',
+    };
+  }
+
+  const parentBranch = state.branches[context.base_path];
+  const parentHint =
+    parentBranch?.intent_summary ||
+    parentBranch?.mainline_summary ||
+    (parentBranch?.anchor_node_id ? state.nodes[parentBranch.anchor_node_id]?.content : '') ||
+    '';
+
+  return {
+    intentSummary: compactText(intentSource, 120),
+    parentContextTLDR: parentHint
+      ? `Parent branch TLDR: ${compactText(parentHint, 140)}`
+      : 'Parent branch TLDR: continue current branch objective.',
   };
 };
 
@@ -370,18 +427,23 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   createBranch: (projectId, anchorNodeId) => {
     const branchId = uuidv4();
-    const newBranch: Branch = {
-      branch_id: branchId,
-      project_id: projectId,
-      anchor_node_id: anchorNodeId,
-      status: 'active',
-    };
 
     set((state) => {
       const project = state.projects[projectId];
       if (!project) return state;
       const context = state.contexts[project.active_context_id];
       if (!context) return state;
+      const parentBranchId = context.base_path === 'mainline' ? null : context.base_path;
+      const { intentSummary, parentContextTLDR } = deriveBranchMetadata(state, projectId, context, anchorNodeId);
+      const newBranch: Branch = {
+        branch_id: branchId,
+        project_id: projectId,
+        anchor_node_id: anchorNodeId,
+        parent_branch_id: parentBranchId,
+        status: 'active',
+        intent_summary: intentSummary,
+        parent_context_tldr: parentContextTLDR,
+      };
       const snapshot = pickStructure(state);
       const pastStructureSnapshots = [...state.pastStructureSnapshots, snapshot].slice(-MAX_STRUCTURE_HISTORY);
       
@@ -408,12 +470,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!nodeIdsToMove.length) return null;
 
     const branchId = uuidv4();
-    const newBranch: Branch = {
-      branch_id: branchId,
-      project_id: projectId,
-      anchor_node_id: anchorNodeId,
-      status: 'active',
-    };
 
     let movedCount = 0;
 
@@ -422,6 +478,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!project) return state;
       const context = state.contexts[project.active_context_id];
       if (!context) return state;
+      const parentBranchId = context.base_path === 'mainline' ? null : context.base_path;
+      const { intentSummary, parentContextTLDR } = deriveBranchMetadata(
+        state,
+        projectId,
+        context,
+        anchorNodeId,
+        nodeIdsToMove
+      );
+      const newBranch: Branch = {
+        branch_id: branchId,
+        project_id: projectId,
+        anchor_node_id: anchorNodeId,
+        parent_branch_id: parentBranchId,
+        status: 'active',
+        intent_summary: intentSummary,
+        parent_context_tldr: parentContextTLDR,
+      };
       const snapshot = pickStructure(state);
       const pastStructureSnapshots = [...state.pastStructureSnapshots, snapshot].slice(-MAX_STRUCTURE_HISTORY);
 
@@ -548,6 +621,28 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       return {
         contexts: { ...state.contexts, [context.context_id]: updatedContext },
+      };
+    });
+  },
+
+  returnToParentBranch: (projectId) => {
+    set((state) => {
+      const project = state.projects[projectId];
+      if (!project) return state;
+      const context = state.contexts[project.active_context_id];
+      if (!context) return state;
+      if (context.base_path === 'mainline') return state;
+
+      const currentBranch = state.branches[context.base_path];
+      const parentBasePath = currentBranch?.parent_branch_id ?? 'mainline';
+      return {
+        contexts: {
+          ...state.contexts,
+          [context.context_id]: {
+            ...context,
+            base_path: parentBasePath,
+          },
+        },
       };
     });
   },
@@ -773,6 +868,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             branch_id: branchId,
             project_id: projectId,
             anchor_node_id: anchorId,
+            parent_branch_id: null,
             status: 'active',
           };
         }

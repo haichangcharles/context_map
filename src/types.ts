@@ -27,7 +27,10 @@ export interface Branch {
   branch_id: string;
   project_id: string;
   anchor_node_id: string;
+  parent_branch_id: string | null;
   status: 'active' | 'inactive';
+  intent_summary?: string;
+  parent_context_tldr?: string;
   mainline_summary?: string;
 }
 
