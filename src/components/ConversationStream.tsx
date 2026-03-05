@@ -50,7 +50,40 @@ const resolveVisibleNodesForBasePath = (
   const branchChainIds = getBranchChainIds(currentBranch.branch_id, branchesById);
   const rootBranchId = branchChainIds[0];
   const rootBranch = rootBranchId ? branchesById[rootBranchId] : null;
-  const anchorIndex = rootBranch ? resolvedMainlineIds.indexOf(rootBranch.anchor_node_id) : -1;
+  let anchorIndex = rootBranch ? resolvedMainlineIds.indexOf(rootBranch.anchor_node_id) : -1;
+
+  if (anchorIndex === -1 && rootBranch) {
+    const anchorNode = nodesById[rootBranch.anchor_node_id];
+    if (anchorNode && anchorNode.branch_id === null) {
+      const projectMainlineNodes = Object.values(nodesById)
+        .filter((n) => n.project_id === anchorNode.project_id && n.branch_id === null)
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      anchorIndex = projectMainlineNodes.findIndex((n) => n.node_id === rootBranch.anchor_node_id);
+      if (anchorIndex !== -1) {
+        const recoveredBaseIds = projectMainlineNodes.slice(0, anchorIndex + 1).map((n) => n.node_id);
+        const baseNodes = recoveredBaseIds.map((id) => nodesById[id]).filter(Boolean);
+        const allNodes = Object.values(nodesById);
+        const threadedBranchNodes: Node[] = [];
+
+        branchChainIds.forEach((branchId, idx) => {
+          const segmentNodes = allNodes
+            .filter((n) => n.branch_id === branchId)
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+          const nextBranchId = branchChainIds[idx + 1];
+          if (!nextBranchId) { threadedBranchNodes.push(...segmentNodes); return; }
+          const nextAnchorNodeId = branchesById[nextBranchId]?.anchor_node_id;
+          const cutoffIndex = nextAnchorNodeId ? segmentNodes.findIndex((n) => n.node_id === nextAnchorNodeId) : -1;
+          if (cutoffIndex === -1) { threadedBranchNodes.push(...segmentNodes); return; }
+          threadedBranchNodes.push(...segmentNodes.slice(0, cutoffIndex + 1));
+        });
+
+        const dedup = new Map<string, Node>();
+        [...baseNodes, ...threadedBranchNodes].forEach((n) => dedup.set(n.node_id, n));
+        return Array.from(dedup.values());
+      }
+    }
+  }
+
   const baseNodes = anchorIndex !== -1
     ? resolvedMainlineIds.slice(0, anchorIndex + 1).map((id) => nodesById[id]).filter(Boolean)
     : resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
@@ -76,7 +109,6 @@ const resolveVisibleNodesForBasePath = (
       return;
     }
 
-    // Child branch starts from this anchor, so parent branch should only show prefix up to anchor.
     threadedBranchNodes.push(...segmentNodes.slice(0, cutoffIndex + 1));
   });
 

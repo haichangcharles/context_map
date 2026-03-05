@@ -126,7 +126,38 @@ const resolveVisibleNodesForBasePath = (
   const branchChainIds = getBranchChainIds(currentBranch.branch_id, branchesById);
   const rootBranchId = branchChainIds[0];
   const rootBranch = rootBranchId ? branchesById[rootBranchId] : null;
-  const anchorIndex = rootBranch ? resolvedMainlineIds.indexOf(rootBranch.anchor_node_id) : -1;
+  let anchorIndex = rootBranch ? resolvedMainlineIds.indexOf(rootBranch.anchor_node_id) : -1;
+
+  if (anchorIndex === -1 && rootBranch) {
+    const anchorNode = nodesById[rootBranch.anchor_node_id];
+    if (anchorNode && anchorNode.branch_id === null) {
+      const projectMainlineNodes = Object.values(nodesById)
+        .filter((n) => n.project_id === anchorNode.project_id && n.branch_id === null)
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      anchorIndex = projectMainlineNodes.findIndex((n) => n.node_id === rootBranch.anchor_node_id);
+      if (anchorIndex !== -1) {
+        const recoveredBaseIds = projectMainlineNodes.slice(0, anchorIndex + 1).map((n) => n.node_id);
+        const baseNodes = recoveredBaseIds.map((id) => nodesById[id]).filter(Boolean);
+        const allNodes = Object.values(nodesById);
+        const threadedBranchNodes: Node[] = [];
+        branchChainIds.forEach((branchId, idx) => {
+          const segmentNodes = allNodes
+            .filter((n) => n.branch_id === branchId)
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+          const nextBranchId = branchChainIds[idx + 1];
+          if (!nextBranchId) { threadedBranchNodes.push(...segmentNodes); return; }
+          const nextAnchorNodeId = branchesById[nextBranchId]?.anchor_node_id;
+          const cutoffIndex = nextAnchorNodeId ? segmentNodes.findIndex((n) => n.node_id === nextAnchorNodeId) : -1;
+          if (cutoffIndex === -1) { threadedBranchNodes.push(...segmentNodes); return; }
+          threadedBranchNodes.push(...segmentNodes.slice(0, cutoffIndex + 1));
+        });
+        const dedup = new Map<string, Node>();
+        [...baseNodes, ...threadedBranchNodes].forEach((n) => dedup.set(n.node_id, n));
+        return Array.from(dedup.values());
+      }
+    }
+  }
+
   const baseNodes = anchorIndex !== -1
     ? resolvedMainlineIds.slice(0, anchorIndex + 1).map((id) => nodesById[id]).filter(Boolean)
     : resolvedMainlineIds.map((id) => nodesById[id]).filter(Boolean);
@@ -355,6 +386,14 @@ export default function ContextMap() {
     const rawMainline = mainlines[project.project_id] || [];
     const validMainline = rawMainline.filter((id) => nodes[id]?.project_id === project.project_id);
     if (validMainline.length > 0) return validMainline;
+
+    if (rawMainline.length > 0 && validMainline.length === 0) {
+      console.warn('[context-map] all mainline IDs are invalid; falling back to branch_id===null nodes', {
+        projectId: project.project_id,
+        rawMainlineLength: rawMainline.length,
+      });
+    }
+
     const fallbackMainline = Object.values(nodes)
       .filter((n) => n.project_id === project.project_id && n.branch_id === null)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
@@ -412,15 +451,44 @@ export default function ContextMap() {
     const mainlineNodeIds = resolvedMainlineNodeIds;
     const modeChanged = previousLayoutModeRef.current !== layoutMode;
     const relayoutRequested = previousLayoutRefreshTokenRef.current !== layoutRefreshToken;
+
+    const projectNodes = Object.values(nodes).filter((n) => n.project_id === project.project_id);
+    const projectBranches = Object.values(branches).filter((branch) => branch.project_id === project.project_id);
+
+    const structureSignature = JSON.stringify({
+      mainline: mainlineNodeIds,
+      projectNodes: projectNodes
+        .map((n) => `${n.node_id}:${n.parent_id ?? 'null'}:${n.branch_id ?? 'mainline'}`)
+        .sort(),
+      branches: projectBranches
+        .map((b) => `${b.branch_id}:${b.anchor_node_id}`)
+        .sort(),
+    });
+    const structureChanged = previousStructureSignatureRef.current !== structureSignature;
+
+    if (!structureChanged && !modeChanged && !relayoutRequested) {
+      setFlowNodes((prevNodes) => {
+        if (prevNodes.length === 0) return prevNodes;
+        let changed = false;
+        const updated = prevNodes.map((fn) => {
+          const currentNode = nodes[fn.id];
+          if (!currentNode || fn.data.content === currentNode.content) return fn;
+          changed = true;
+          return { ...fn, data: { ...fn.data, content: currentNode.content } };
+        });
+        return changed ? updated : prevNodes;
+      });
+      return;
+    }
+
     previousLayoutModeRef.current = layoutMode;
     previousLayoutRefreshTokenRef.current = layoutRefreshToken;
+    previousStructureSignatureRef.current = structureSignature;
 
     const initialNodes: FlowNode[] = [];
     const initialEdges: Edge[] = [];
 
-    const projectBranches = Object.values(branches).filter((branch) => branch.project_id === project.project_id);
     const projectBranchIds = new Set(projectBranches.map((branch) => branch.branch_id));
-    const projectNodes = Object.values(nodes).filter((n) => n.project_id === project.project_id);
 
     if (projectNodes.length > 0 && mainlineNodeIds.length === 0) {
       console.warn('[context-map] project has nodes but resolved mainline is empty', {
@@ -478,18 +546,6 @@ export default function ContextMap() {
         if (aIndex !== bIndex) return aIndex - bIndex;
         return new Date(a.branchNodes[0].timestamp).getTime() - new Date(b.branchNodes[0].timestamp).getTime();
       });
-
-    const structureSignature = JSON.stringify({
-      mainline: mainlineNodeIds,
-      projectNodes: projectNodes
-        .map((n) => `${n.node_id}:${n.parent_id ?? 'null'}:${n.branch_id ?? 'mainline'}`)
-        .sort(),
-      branchGroups: projectBranchGroups
-        .map((g) => `${g.branch.branch_id}:${g.branch.anchor_node_id}:${g.branchNodes.map((n) => n.node_id).join(',')}`)
-        .sort(),
-    });
-    const structureChanged = previousStructureSignatureRef.current !== structureSignature;
-    previousStructureSignatureRef.current = structureSignature;
 
     const branchSideById = new Map<string, BranchSide>();
     if (layoutMode === 'mindmap') {
@@ -596,42 +652,70 @@ export default function ContextMap() {
       }
     });
 
+    // Ensure all branch anchor nodes exist in initialNodes before adding branch nodes.
+    const addedNodeIds = new Set(initialNodes.map((n) => n.id));
+    projectBranchGroups.forEach(({ branch }) => {
+      if (addedNodeIds.has(branch.anchor_node_id)) return;
+      const anchorNode = nodes[branch.anchor_node_id];
+      if (!anchorNode) return;
+      initialNodes.push({
+        id: branch.anchor_node_id,
+        type: 'custom',
+        position: { x: 0, y: 0 },
+        data: {
+          role: anchorNode.role,
+          content: anchorNode.content,
+          branchId: anchorNode.branch_id,
+          isActive: activeNodeIds.has(branch.anchor_node_id),
+          isExcluded: context.excluded_nodes.includes(branch.anchor_node_id),
+          isIncluded: context.included_nodes.includes(branch.anchor_node_id),
+          isSelectedStart: branch.anchor_node_id === selectedStartId,
+          onToggle: () => toggleNodeInclusion(project.project_id, branch.anchor_node_id),
+          onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, branch.anchor_node_id),
+        },
+      });
+      addedNodeIds.add(branch.anchor_node_id);
+    });
+
     // Place branch nodes
     projectBranchGroups.forEach(({ branch, branchNodes }) => {
       const side = branchSideById.get(branch.branch_id) || 'right';
       branchNodes.forEach((node, index) => {
-        initialNodes.push({
-          id: node.node_id,
-          type: 'custom',
-          position: { x: 0, y: 0 },
-          data: {
-            role: node.role,
-            content: node.content,
-            branchId: node.branch_id,
-            isActive: activeNodeIds.has(node.node_id),
-            isExcluded: context.excluded_nodes.includes(node.node_id),
-            isIncluded: context.included_nodes.includes(node.node_id),
-            isSelectedStart: node.node_id === selectedStartId,
-            onToggle: () => toggleNodeInclusion(project.project_id, node.node_id),
-            onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, node.node_id),
-          },
-        });
+        if (!addedNodeIds.has(node.node_id)) {
+          initialNodes.push({
+            id: node.node_id,
+            type: 'custom',
+            position: { x: 0, y: 0 },
+            data: {
+              role: node.role,
+              content: node.content,
+              branchId: node.branch_id,
+              isActive: activeNodeIds.has(node.node_id),
+              isExcluded: context.excluded_nodes.includes(node.node_id),
+              isIncluded: context.included_nodes.includes(node.node_id),
+              isSelectedStart: node.node_id === selectedStartId,
+              onToggle: () => toggleNodeInclusion(project.project_id, node.node_id),
+              onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, node.node_id),
+            },
+          });
+          addedNodeIds.add(node.node_id);
+        }
 
         if (index === 0) {
-          // Connect to anchor
-          initialEdges.push({
-            id: `e-${branch.anchor_node_id}-${node.node_id}`,
-            source: branch.anchor_node_id,
-            target: node.node_id,
-            sourceHandle: layoutMode === 'tree' ? undefined : side === 'left' ? 'left' : 'right',
-            targetHandle: layoutMode === 'tree' ? undefined : side === 'left' ? 'right' : 'left',
-            type: 'smoothstep',
-            animated: true,
-            style: { stroke: '#6366f1', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' },
-          });
+          if (addedNodeIds.has(branch.anchor_node_id)) {
+            initialEdges.push({
+              id: `e-${branch.anchor_node_id}-${node.node_id}`,
+              source: branch.anchor_node_id,
+              target: node.node_id,
+              sourceHandle: layoutMode === 'tree' ? undefined : side === 'left' ? 'left' : 'right',
+              targetHandle: layoutMode === 'tree' ? undefined : side === 'left' ? 'right' : 'left',
+              type: 'smoothstep',
+              animated: true,
+              style: { stroke: '#6366f1', strokeWidth: 2 },
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' },
+            });
+          }
         } else {
-          // Connect to previous branch node
           initialEdges.push({
             id: `e-${branchNodes[index-1].node_id}-${node.node_id}`,
             source: branchNodes[index-1].node_id,
@@ -645,27 +729,50 @@ export default function ContextMap() {
       });
     });
 
-    const { nodes: dagreNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, initialEdges, 'TB');
-    const structuredNodes =
-      layoutMode === 'tree'
-        ? dagreNodes
-        : getStructuredPositions(dagreNodes, mainlineNodeIds, projectBranchGroups, branchSideById, layoutMode);
+    let layoutSuccess = false;
+    try {
+      const { nodes: dagreNodes, edges: layoutedEdges } = getLayoutedElements(initialNodes, initialEdges, 'TB');
+      const structuredNodes =
+        layoutMode === 'tree'
+          ? dagreNodes
+          : getStructuredPositions(dagreNodes, mainlineNodeIds, projectBranchGroups, branchSideById, layoutMode);
 
-    setFlowNodes((prevNodes) => {
-      const prevNodeById = new Map(prevNodes.map((n) => [n.id, n]));
-      return structuredNodes.map((node) => {
-        const prev = prevNodeById.get(node.id);
-        const keepTreePosition = layoutMode === 'tree' && !modeChanged && !relayoutRequested && !structureChanged;
-        return {
-          ...node,
-          position: keepTreePosition && prev ? prev.position : node.position,
-          selected: prev ? !!prev.selected : false,
-        };
-      });
-    });
-    setFlowEdges(layoutedEdges);
+      if (structuredNodes.length === 0 && initialNodes.length > 0) {
+        console.warn('[context-map] layout produced 0 nodes from', initialNodes.length, 'initial nodes; skipping update');
+      } else {
+        setFlowNodes((prevNodes) => {
+          if (structuredNodes.length === 0 && prevNodes.length > 0 && initialNodes.length > 0) {
+            console.warn('[context-map] preventing flow node clear — keeping previous', prevNodes.length, 'nodes');
+            return prevNodes;
+          }
+          const prevNodeById = new Map(prevNodes.map((n) => [n.id, n]));
+          return structuredNodes.map((node) => {
+            const prev = prevNodeById.get(node.id);
+            const keepTreePosition = layoutMode === 'tree' && !modeChanged && !relayoutRequested && !structureChanged;
+            return {
+              ...node,
+              position: keepTreePosition && prev ? prev.position : node.position,
+              selected: prev ? !!prev.selected : false,
+            };
+          });
+        });
+        setFlowEdges(layoutedEdges);
+        layoutSuccess = true;
+      }
+    } catch (layoutError) {
+      console.warn('[context-map] dagre layout failed; using fallback positioning', layoutError);
+      const fallbackNodes = initialNodes.map((node, idx) => ({
+        ...node,
+        targetPosition: Position.Top,
+        sourcePosition: Position.Bottom,
+        position: { x: 0, y: idx * 120 },
+      }));
+      setFlowNodes(fallbackNodes);
+      setFlowEdges(initialEdges);
+      layoutSuccess = true;
+    }
 
-    if (structureChanged && rfInstance) {
+    if (layoutSuccess && structureChanged && rfInstance) {
       window.requestAnimationFrame(() => {
         rfInstance.fitView({ duration: 300, padding: 0.15 });
       });
@@ -692,15 +799,18 @@ export default function ContextMap() {
   useEffect(() => {
     if (!rfInstance || !project) return;
     if (projectNodeCount === 0 || flowNodes.length > 0) return;
-    console.warn('[context-map] map appears empty while project has nodes; triggering recovery fit', {
+    console.warn('[context-map] map appears empty while project has nodes; triggering recovery', {
       projectId: project.project_id,
       projectNodeCount,
+      flowNodesLength: flowNodes.length,
+      resolvedMainlineLength: resolvedMainlineNodeIds.length,
+      basePath: context?.base_path,
     });
     setLayoutRefreshToken((n) => n + 1);
     window.requestAnimationFrame(() => {
       rfInstance.fitView({ duration: 300, padding: 0.15 });
     });
-  }, [rfInstance, project, projectNodeCount, flowNodes.length]);
+  }, [rfInstance, project, projectNodeCount, flowNodes.length, resolvedMainlineNodeIds.length, context?.base_path]);
 
   // Auto fit view on resize
   useEffect(() => {

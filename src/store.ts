@@ -625,6 +625,27 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       let nextMainline = currentMainline.filter((id) => !removalSet.has(id));
       let nextNaturalMainline = currentNaturalMainline.filter((id) => !removalSet.has(id));
 
+      if (nextMainline.length === 0 && currentMainline.length > 0) {
+        console.warn('[accept-branch] mainline would become empty after filtering moved nodes; recovering from anchor', {
+          projectId,
+          anchorNodeId,
+          currentMainlineLength: currentMainline.length,
+          removalSetSize: removalSet.size,
+          movedIds: Array.from(removalSet),
+        });
+        const anchorNode = updatedNodes[anchorNodeId];
+        if (anchorNode && anchorNode.project_id === projectId) {
+          const anchorIdx = currentMainline.indexOf(anchorNodeId);
+          if (anchorIdx !== -1) {
+            nextMainline = currentMainline.slice(0, anchorIdx + 1).filter((id) => !removalSet.has(id));
+          }
+          if (nextMainline.length === 0) {
+            updatedNodes[anchorNodeId] = { ...anchorNode, branch_id: null };
+            nextMainline = [anchorNodeId];
+          }
+        }
+      }
+
       const repairedMainline = ensureNonEmptyMainline(projectId, nextMainline, updatedNodes, [anchorNodeId]);
       if (repairedMainline.repairedNodeId) {
         const repairedNodeId = repairedMainline.repairedNodeId;
@@ -646,6 +667,18 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
           repairedNodeId,
           removalCount: removalSet.size,
         });
+      }
+
+      const mainlineNodeValidation = nextMainline.every((id) => {
+        const n = updatedNodes[id];
+        return n && n.project_id === projectId;
+      });
+      if (!mainlineNodeValidation && nextMainline.length > 0) {
+        console.warn('[accept-branch] mainline contains invalid node references after accept', {
+          projectId,
+          nextMainline,
+        });
+        nextMainline = nextMainline.filter((id) => updatedNodes[id]?.project_id === projectId);
       }
 
       const updatedContext: ContextView = {
