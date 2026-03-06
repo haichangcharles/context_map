@@ -1,31 +1,36 @@
 # Findings & Decisions
 
 ## Requirements
-- User wants a dedicated SDK folder and a concrete plan to convert current app into reusable SDK.
-- Output should make it easy for others to repeatedly integrate Context Map into their own products.
+- Sync `pattern` data to Supabase in addition to existing browser-local persistence.
+- Keep current per-user local behavior intact.
+- Produce concrete table/schema guidance for the remote side.
 
 ## Research Findings
-- Current repo already has strong reusable logic in `src/store.ts` and domain model in `src/types.ts`.
-- UI and logic are currently coupled through Zustand + React components; this is main extraction boundary.
-- SDK scaffold created under `sdk/` with core/react/adapters/docs split.
+- App state, including `patterns`, is persisted only through Zustand `persist` into user-scoped browser `localStorage` keys in `src/store.ts`.
+- Chat messages already use a separate local-first sync service in `src/services/chatHistory.ts`: write to `localStorage`, queue pending records, then POST batches to Supabase when env/network is available.
+- `createPattern`, `updatePattern`, `approvePattern`, and `deletePattern` are centralized in `src/store.ts`, so they are the cleanest integration points for remote sync.
+- The manage page already exposes chat sync status but not any pattern sync state.
+- The repo has no Vitest/Jest harness; scripted `tsx` tests are the established lightweight testing path.
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Define `@context-map/core` first | Core must be UI-agnostic to support plugins/editors/webviews |
-| Define `@context-map/react` as optional UI layer | React hosts can embed quickly while non-React hosts still use core |
-| Define adapter contracts (`model/storage/event`) | Prevent hard-coding provider-specific behavior |
-| Keep first pass as scaffold with minimal in-memory engine | Reduces migration risk while enabling immediate external experimentation |
+| Add a dedicated `patternHistory`/pattern sync service instead of overloading Zustand persistence | The remote sync needs queue state, retry behavior, and Supabase mapping separate from local store hydration. |
+| Store pattern records remotely as the latest snapshot plus `is_deleted` | Upsert-friendly design keeps reads simple and supports delete propagation. |
+| Reuse the existing Supabase env vars and retry triggers (`online`, visibility, interval) | Consistent operational behavior reduces surprise and avoids duplicate config. |
 
 ## Issues Encountered
 | Issue | Resolution |
 |-------|------------|
-| `vite.config.ts` had non-ASCII comment artifacts from prior edits | Replaced with ASCII-safe comment |
+| `superpowers:test-driven-development` expects tests-first, but the repo lacks a standard unit test runner | Use the existing `tsx` script-based testing style and run the new script red -> green. |
 
 ## Resources
-- Existing domain/store: `src/types.ts`, `src/store.ts`
-- Existing UI surfaces: `src/components/ConversationStream.tsx`, `src/components/ContextMap.tsx`
-- SDK entry docs: `sdk/README.md`, `sdk/docs/sdk-roadmap.md`
+- `/Users/charles/Downloads/context_map/src/store.ts`
+- `/Users/charles/Downloads/context_map/src/services/chatHistory.ts`
+- `/Users/charles/Downloads/context_map/src/components/ManagePanel.tsx`
+- `/Users/charles/Downloads/context_map/src/components/ContextMap.tsx`
 
-## Visual/Browser Findings
-- N/A (no visual research required for this task)
+## Sync/Data Findings
+- Chat sync uses `context-map.chat-history.by-user.v1`, `context-map.chat-history.pending-sync.v1`, and `context-map.chat-history.sync-status.v1` in `localStorage`.
+- Supabase sync is optional; if env vars are absent, local behavior still works.
+- The active user id is already available from `branchFeedbackDataset`, so pattern sync can share the same user identity source.

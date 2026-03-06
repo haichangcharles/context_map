@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
-import { Project, Node, Branch, ContextView, Pattern, Role } from './types';
+import { Project, Node, Branch, ContextView, Pattern, PatternType, Role } from './types';
+import { logPatternDelete, logPatternUpsert, mergeRemotePatternsIntoPatterns, type PatternSyncRecord } from './services/patternSync';
 
 type StructureSnapshot = {
   nodes: Record<string, Node>;
@@ -36,12 +37,28 @@ interface AppState {
   promoteBranch: (projectId: string, branchId: string) => void;
   returnToMainline: (projectId: string) => void;
   returnToParentBranch: (projectId: string) => void;
+  cycleNodeInclusionState: (projectId: string, nodeId: string) => void;
   toggleNodeInclusion: (projectId: string, nodeId: string) => void;
-  setActivePattern: (projectId: string, patternId: string | null) => void;
+  enablePatternForType: (projectId: string, contextId: string, type: PatternType, patternId: string) => void;
+  disablePatternForType: (projectId: string, contextId: string, type: PatternType) => void;
   
   updateBranchSummary: (branchId: string, summary: string) => void;
-  createPattern: (projectId: string, name: string, fromNodeId: string, toNodeId: string, guidanceText: string, steps: string[]) => string;
-  setActiveStep: (projectId: string, stepIndex: number) => void;
+  createPattern: (input: {
+    type: PatternType;
+    name: string;
+    requires_human_review: boolean;
+    instruction: string;
+    example: string;
+    fromNodeId: string;
+    toNodeId: string;
+    sourceProjectId?: string;
+  }) => string;
+  updatePattern: (
+    patternId: string,
+    patch: Partial<Pick<Pattern, 'name' | 'instruction' | 'example' | 'requires_human_review'>>
+  ) => void;
+  approvePattern: (patternId: string) => void;
+  deletePattern: (patternId: string) => void;
   batchToggleInclusion: (projectId: string, nodeIds: string[], action: 'include' | 'exclude') => void;
   setMainlineEndpoints: (projectId: string, startId: string, endId: string) => void;
   jumpToNode: (projectId: string, nodeId: string) => void;
@@ -59,8 +76,12 @@ const EXAMPLE_BRANCH_UI = 'example-branch-ui';
 const shouldSeedExampleData = (): boolean => {
   if (typeof window === 'undefined') return false;
   const activeUserKey = 'context-map.active-user-id';
-  const userId = (window.localStorage.getItem(activeUserKey) || '').trim();
-  return userId === 'test';
+  const fallbackUser = 'local-anonymous';
+  const storeKey = 'context-map.app-state.v1';
+  const userId = (window.localStorage.getItem(activeUserKey) || '').trim() || fallbackUser;
+  const scopedStoreKey = `${storeKey}:${userId}`;
+  const hasPersistedState = !!window.localStorage.getItem(scopedStoreKey);
+  return userId === 'test' || !hasPersistedState;
 };
 
 const exampleNodes: Record<string, Node> = {
@@ -305,6 +326,71 @@ const deriveParentBranchIdFromAnchor = (
   return anchorBranch.branch_id;
 };
 
+const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): string[] => {
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = branchId;
+
+  while (cursor) {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    const branch = branches[cursor];
+    if (!branch) break;
+    chain.push(branch.branch_id);
+    cursor = branch.parent_branch_id;
+  }
+
+  return chain.reverse();
+};
+
+const resolveVisibleNodeIdsForBasePath = (
+  projectId: string,
+  basePath: string,
+  branchesById: Record<string, Branch>,
+  nodesById: Record<string, Node>,
+  mainlineIds: string[]
+): Set<string> => {
+  const validMainlineIds = mainlineIds.filter((id) => nodesById[id]?.project_id === projectId);
+
+  if (basePath === 'mainline') {
+    return new Set(validMainlineIds);
+  }
+
+  const currentBranch = branchesById[basePath];
+  if (!currentBranch) {
+    return new Set(validMainlineIds);
+  }
+
+  const branchChainIds = getBranchChainIds(currentBranch.branch_id, branchesById);
+  const rootBranchId = branchChainIds[0];
+  const rootBranch = rootBranchId ? branchesById[rootBranchId] : null;
+  const anchorIndex = rootBranch ? validMainlineIds.indexOf(rootBranch.anchor_node_id) : -1;
+  const baseNodeIds = anchorIndex !== -1 ? validMainlineIds.slice(0, anchorIndex + 1) : validMainlineIds;
+  const visibleIds = new Set<string>(baseNodeIds);
+  const allProjectNodes = Object.values(nodesById).filter((node) => node.project_id === projectId);
+
+  branchChainIds.forEach((branchId, idx) => {
+    const segmentNodes = allProjectNodes
+      .filter((node) => node.branch_id === branchId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const nextBranchId = branchChainIds[idx + 1];
+    if (!nextBranchId) {
+      segmentNodes.forEach((node) => visibleIds.add(node.node_id));
+      return;
+    }
+
+    const nextAnchorNodeId = branchesById[nextBranchId]?.anchor_node_id;
+    const cutoffIndex = nextAnchorNodeId
+      ? segmentNodes.findIndex((node) => node.node_id === nextAnchorNodeId)
+      : -1;
+    const nodesToInclude = cutoffIndex === -1 ? segmentNodes : segmentNodes.slice(0, cutoffIndex + 1);
+    nodesToInclude.forEach((node) => visibleIds.add(node.node_id));
+  });
+
+  return visibleIds;
+};
+
 const ensureNonEmptyMainline = (
   projectId: string,
   candidateMainline: string[],
@@ -359,7 +445,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
           base_path: 'mainline',
           included_nodes: [],
           excluded_nodes: [],
-          active_pattern: null,
+          enabled_patterns_by_type: {},
         },
       }
     : {},
@@ -392,7 +478,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       base_path: 'mainline',
       included_nodes: [],
       excluded_nodes: [],
-      active_pattern: null,
+      enabled_patterns_by_type: {},
     };
 
     set((state) => ({
@@ -830,25 +916,37 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     });
   },
 
-  toggleNodeInclusion: (projectId, nodeId) => {
+  cycleNodeInclusionState: (projectId, nodeId) => {
     set((state) => {
       const project = state.projects[projectId];
+      if (!project) return state;
       const context = state.contexts[project.active_context_id];
-      
+      if (!context) return state;
+      const node = state.nodes[nodeId];
+      if (!node || node.project_id !== projectId) return state;
+      const resolvedMainline = (state.mainlines[projectId] || []).filter((id) => state.nodes[id]?.project_id === projectId);
+      const naturalVisibleIds = resolveVisibleNodeIdsForBasePath(
+        projectId,
+        context.base_path,
+        state.branches,
+        state.nodes,
+        resolvedMainline
+      );
+
       let newIncluded = [...context.included_nodes];
       let newExcluded = [...context.excluded_nodes];
+      const isExplicitlyIncluded = newIncluded.includes(nodeId);
+      const isExplicitlyExcluded = newExcluded.includes(nodeId);
+      const isNaturallyActive = naturalVisibleIds.has(nodeId);
+      const isEffectivelyIncluded = (isNaturallyActive && !isExplicitlyExcluded) || isExplicitlyIncluded;
 
-      // If it's in excluded, remove from excluded
-      if (newExcluded.includes(nodeId)) {
-        newExcluded = newExcluded.filter(id => id !== nodeId);
-      } else if (newIncluded.includes(nodeId)) {
-        // If it's in included, move to excluded
-        newIncluded = newIncluded.filter(id => id !== nodeId);
+      newIncluded = newIncluded.filter((id) => id !== nodeId);
+      newExcluded = newExcluded.filter((id) => id !== nodeId);
+
+      if (isEffectivelyIncluded) {
         newExcluded.push(nodeId);
       } else {
-        // If it's in neither, it means it's part of the base path or inactive.
-        // We can explicitly exclude it.
-        newExcluded.push(nodeId);
+        newIncluded.push(nodeId);
       }
 
       return {
@@ -864,18 +962,48 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     });
   },
 
-  setActivePattern: (projectId, patternId) => {
+  toggleNodeInclusion: (projectId, nodeId) => {
+    get().cycleNodeInclusionState(projectId, nodeId);
+  },
+
+  enablePatternForType: (projectId, contextId, type, patternId) => {
     set((state) => {
       const project = state.projects[projectId];
-      const context = state.contexts[project.active_context_id];
-      
+      if (!project) return state;
+      const context = state.contexts[contextId];
+      if (!context || context.project_id !== projectId) return state;
+      const pattern = state.patterns[patternId];
+      if (!pattern || pattern.type !== type) return state;
+
       return {
         contexts: {
           ...state.contexts,
           [context.context_id]: {
             ...context,
-            active_pattern: patternId,
-            active_step_index: patternId ? 0 : undefined,
+            enabled_patterns_by_type: {
+              ...context.enabled_patterns_by_type,
+              [type]: patternId,
+            },
+          },
+        },
+      };
+    });
+  },
+
+  disablePatternForType: (projectId, contextId, type) => {
+    set((state) => {
+      const project = state.projects[projectId];
+      if (!project) return state;
+      const context = state.contexts[contextId];
+      if (!context || context.project_id !== projectId) return state;
+
+      const { [type]: _, ...restEnabled } = context.enabled_patterns_by_type;
+      return {
+        contexts: {
+          ...state.contexts,
+          [context.context_id]: {
+            ...context,
+            enabled_patterns_by_type: restEnabled,
           },
         },
       };
@@ -895,32 +1023,104 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     });
   },
 
-  createPattern: (projectId, name, fromNodeId, toNodeId, guidanceText, steps) => {
+  createPattern: ({
+    type,
+    name,
+    requires_human_review,
+    instruction,
+    example,
+    fromNodeId,
+    toNodeId,
+    sourceProjectId,
+  }) => {
     const patternId = uuidv4();
+    const now = new Date().toISOString();
     const newPattern: Pattern = {
       pattern_id: patternId,
+      type,
       name,
+      requires_human_review,
+      instruction,
+      example,
+      review_status: requires_human_review ? 'pending' : 'approved',
       source_line: { from: fromNodeId, to: toNodeId },
-      guidance_text: guidanceText,
-      steps,
+      created_at: now,
+      updated_at: now,
+      created_from_project_id: sourceProjectId,
     };
     set((state) => ({
       patterns: { ...state.patterns, [patternId]: newPattern },
     }));
+    void logPatternUpsert(newPattern);
     return patternId;
   },
 
-  setActiveStep: (projectId, stepIndex) => {
+  updatePattern: (patternId, patch) => {
+    let nextPattern: Pattern | null = null;
     set((state) => {
-      const project = state.projects[projectId];
-      const context = state.contexts[project.active_context_id];
+      const existing = state.patterns[patternId];
+      if (!existing) return state;
+      nextPattern = {
+        ...existing,
+        ...patch,
+        updated_at: new Date().toISOString(),
+      };
       return {
-        contexts: {
-          ...state.contexts,
-          [context.context_id]: { ...context, active_step_index: stepIndex },
+        patterns: {
+          ...state.patterns,
+          [patternId]: nextPattern,
         },
       };
     });
+    if (nextPattern) {
+      void logPatternUpsert(nextPattern);
+    }
+  },
+
+  approvePattern: (patternId) => {
+    let nextPattern: Pattern | null = null;
+    set((state) => {
+      const existing = state.patterns[patternId];
+      if (!existing) return state;
+      nextPattern = {
+        ...existing,
+        review_status: 'approved',
+        updated_at: new Date().toISOString(),
+      };
+      return {
+        patterns: {
+          ...state.patterns,
+          [patternId]: nextPattern,
+        },
+      };
+    });
+    if (nextPattern) {
+      void logPatternUpsert(nextPattern);
+    }
+  },
+
+  deletePattern: (patternId) => {
+    let deletedPattern: Pattern | null = null;
+    set((state) => {
+      deletedPattern = state.patterns[patternId] || null;
+      if (!deletedPattern) return state;
+      const { [patternId]: _, ...restPatterns } = state.patterns;
+      const updatedContexts = Object.fromEntries(
+        Object.entries(state.contexts).map(([contextId, ctx]) => {
+          const nextEnabled = Object.fromEntries(
+            Object.entries(ctx.enabled_patterns_by_type).filter(([, id]) => id !== patternId)
+          ) as Partial<Record<PatternType, string>>;
+          return [contextId, { ...ctx, enabled_patterns_by_type: nextEnabled }];
+        })
+      );
+      return {
+        patterns: restPatterns,
+        contexts: updatedContexts,
+      };
+    });
+    if (deletedPattern) {
+      void logPatternDelete(deletedPattern);
+    }
   },
 
   batchToggleInclusion: (projectId, nodeIds, action) => {
@@ -1233,12 +1433,85 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   }),
   merge: (persistedState, currentState) => {
     const persisted = persistedState as Partial<AppState>;
+    const persistedPatternsRaw = (persisted.patterns as Record<string, any>) || {};
+    const migratedPatterns = Object.fromEntries(
+      Object.entries(persistedPatternsRaw).map(([patternId, pattern]) => {
+        if (
+          pattern &&
+          typeof pattern === 'object' &&
+          typeof pattern.instruction === 'string' &&
+          typeof pattern.example === 'string' &&
+          typeof pattern.name === 'string'
+        ) {
+          return [patternId, pattern];
+        }
+        const legacyGuidance = typeof pattern?.guidance_text === 'string' ? pattern.guidance_text : '';
+        const legacySteps = Array.isArray(pattern?.steps) ? pattern.steps.filter((s: unknown) => typeof s === 'string') : [];
+        const instructionBody = [
+          legacyGuidance,
+          legacySteps.length > 0
+            ? `Legacy Steps:\n${legacySteps.map((step, idx) => `${idx + 1}. ${step}`).join('\n')}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+        const now = new Date().toISOString();
+        const migratedPattern: Pattern = {
+          pattern_id: typeof pattern?.pattern_id === 'string' ? pattern.pattern_id : patternId,
+          type: 'task_sop',
+          name: typeof pattern?.name === 'string' ? pattern.name : 'Legacy Pattern',
+          requires_human_review: true,
+          instruction: instructionBody || 'Legacy guidance migrated from previous schema.',
+          example: 'Legacy pattern migrated from previous schema.',
+          review_status: 'pending',
+          source_line:
+            pattern?.source_line &&
+            typeof pattern.source_line.from === 'string' &&
+            typeof pattern.source_line.to === 'string'
+              ? pattern.source_line
+              : { from: '', to: '' },
+          created_at: now,
+          updated_at: now,
+        };
+        return [patternId, migratedPattern];
+      })
+    ) as Record<string, Pattern>;
+
+    const migratedContexts = Object.fromEntries(
+      Object.entries((persisted.contexts as Record<string, ContextView & {
+        active_pattern?: string | null;
+      }>) || {}).map(([contextId, ctx]) => {
+        if ('enabled_patterns_by_type' in ctx && ctx.enabled_patterns_by_type) {
+          return [contextId, ctx];
+        }
+        const migratedContext: ContextView = {
+          ...ctx,
+          enabled_patterns_by_type: {},
+        };
+        return [contextId, migratedContext];
+      })
+    ) as Record<string, ContextView>;
+
     const merged = {
       ...currentState,
       ...persisted,
+      patterns: Object.keys(migratedPatterns).length > 0 ? migratedPatterns : currentState.patterns,
+      contexts: Object.keys(migratedContexts).length > 0 ? migratedContexts : currentState.contexts,
       pastStructureSnapshots: [],
       futureStructureSnapshots: [],
     } as AppState;
+    const currentHasSeededProjects = Object.keys(currentState.projects).length > 0;
+    const mergedHasProjects = Object.keys(merged.projects).length > 0;
+    if (currentHasSeededProjects && !mergedHasProjects) {
+      merged.projects = currentState.projects;
+      merged.nodes = currentState.nodes;
+      merged.branches = currentState.branches;
+      merged.mainlines = currentState.mainlines;
+      merged.contexts = currentState.contexts;
+      merged.naturalMainlines = currentState.naturalMainlines;
+      merged.naturalBranches = currentState.naturalBranches;
+      merged.activeProjectId = currentState.activeProjectId;
+    }
     if (!merged.activeProjectId || !merged.projects[merged.activeProjectId]) {
       merged.activeProjectId = Object.keys(merged.projects)[0] || null;
     }
@@ -1249,4 +1522,26 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
 export const rehydrateStoreForActiveUser = async () => {
   useAppStore.setState(useAppStore.getInitialState(), true);
   await useAppStore.persist.rehydrate();
+};
+
+export const mergePatternsFromRemoteRecords = (remoteRecords: PatternSyncRecord[]) => {
+  if (remoteRecords.length === 0) return;
+
+  useAppStore.setState((state) => {
+    const nextPatterns = mergeRemotePatternsIntoPatterns(state.patterns, remoteRecords);
+    const nextPatternIds = new Set(Object.keys(nextPatterns));
+    const nextContexts = Object.fromEntries(
+      Object.entries(state.contexts).map(([contextId, context]) => {
+        const nextEnabled = Object.fromEntries(
+          Object.entries(context.enabled_patterns_by_type).filter(([, patternId]) => nextPatternIds.has(patternId))
+        ) as Partial<Record<PatternType, string>>;
+        return [contextId, { ...context, enabled_patterns_by_type: nextEnabled }];
+      })
+    );
+
+    return {
+      patterns: nextPatterns,
+      contexts: nextContexts,
+    };
+  });
 };

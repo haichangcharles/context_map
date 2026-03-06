@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store';
-import { Node, Branch } from '../types';
-import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Save, CheckCircle2, Circle, Square } from 'lucide-react';
+import { Node, Branch, Pattern, PatternType } from '../types';
+import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Square, X, Check, TriangleAlert, ChevronLeft, ChevronRight, Rows3 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
-import { generateResponseStream, generateMainlineSummary, extractPattern, detectBranchSuggestion } from '../services/gemini';
+import { generateResponseStream, generateMainlineSummary, detectBranchSuggestion } from '../services/gemini';
 import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { flushChatHistoryQueue, logChatNode } from '../services/chatHistory';
 
@@ -13,6 +13,39 @@ type PendingBranchSuggestion = {
   reason: string;
   nodeIdsToMove: string[];
   originBasePath: string;
+};
+
+type InlineNotice = {
+  id: string;
+  title: string;
+  message: string;
+};
+
+const PATTERN_TYPE_ORDER: PatternType[] = ['reasoning', 'task_sop', 'context_case'];
+const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
+  reasoning: 'Reasoning',
+  task_sop: 'Task SOP',
+  context_case: 'Context Case',
+};
+const PATTERN_PAGE_SIZE = 5;
+
+const buildPatternAppendix = (
+  enabledByType: Partial<Record<PatternType, string>>,
+  patternsById: Record<string, Pattern>
+): string => {
+  const lines: string[] = [];
+  PATTERN_TYPE_ORDER.forEach((type) => {
+    const patternId = enabledByType[type];
+    if (!patternId) return;
+    const pattern = patternsById[patternId];
+    if (!pattern) return;
+    lines.push(`[PATTERN: ${type} | ${pattern.name}]`);
+    lines.push(pattern.instruction);
+    if (pattern.example.trim()) {
+      lines.push(`Example:\n${pattern.example}`);
+    }
+  });
+  return lines.join('\n\n');
 };
 
 const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): string[] => {
@@ -158,12 +191,12 @@ export default function ConversationStream() {
   const { 
     projects, activeProjectId, nodes, branches, mainlines, contexts, patterns,
     addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, returnToParentBranch, toggleNodeInclusion,
-    updateBranchSummary, createPattern, setActivePattern, setActiveStep, batchToggleInclusion, updateNodeContent
+    updateBranchSummary, updatePattern, approvePattern, deletePattern,
+    enablePatternForType, disablePatternForType, updateNodeContent
   } = useAppStore();
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isExtractingPattern, setIsExtractingPattern] = useState(false);
   const [pendingBranchSuggestion, setPendingBranchSuggestion] = useState<PendingBranchSuggestion | null>(null);
   const [branchSuggestionNotice, setBranchSuggestionNotice] = useState<string | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
@@ -172,8 +205,13 @@ export default function ConversationStream() {
   const wasManuallyTruncatedRef = useRef(false);
   
   // Selection state
-  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
-  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
+  const [viewingPatternId, setViewingPatternId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editInstruction, setEditInstruction] = useState('');
+  const [editExample, setEditExample] = useState('');
+  const [inlineNotice, setInlineNotice] = useState<InlineNotice | null>(null);
+  const [isPatternLibraryOpen, setIsPatternLibraryOpen] = useState(false);
+  const [patternPage, setPatternPage] = useState(0);
 
   const handleTruncateOutput = () => {
     if (!isLoading) return;
@@ -252,6 +290,15 @@ export default function ConversationStream() {
     return () => window.clearTimeout(timer);
   }, [branchSuggestionNotice]);
 
+  useEffect(() => {
+    if (!viewingPatternId) return;
+    const pattern = patterns[viewingPatternId];
+    if (!pattern) return;
+    setEditName(pattern.name);
+    setEditInstruction(pattern.instruction);
+    setEditExample(pattern.example);
+  }, [viewingPatternId, patterns]);
+
   const rawMainlineNodeIds = project ? mainlines[project.project_id] || [] : [];
   const validMainlineNodeIds = project
     ? rawMainlineNodeIds.filter((id) => nodes[id]?.project_id === project.project_id)
@@ -322,6 +369,25 @@ export default function ConversationStream() {
   
   const allEffectiveNodes = [...new Set([...effectiveNodes, ...includedExtraNodes])]
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const globalPatternList = Object.values(patterns).sort(
+    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+  );
+  const totalPatternPages = Math.max(1, Math.ceil(globalPatternList.length / PATTERN_PAGE_SIZE));
+  const visiblePatternList = globalPatternList.slice(
+    patternPage * PATTERN_PAGE_SIZE,
+    patternPage * PATTERN_PAGE_SIZE + PATTERN_PAGE_SIZE
+  );
+  const enabledPatternMap = context.enabled_patterns_by_type || {};
+  const patternAppendix = buildPatternAppendix(enabledPatternMap, patterns);
+
+  useEffect(() => {
+    setPatternPage((prev) => Math.min(prev, Math.max(0, totalPatternPages - 1)));
+  }, [totalPatternPages]);
+
+  const openPatternPanel = (patternId: string) => {
+    setViewingPatternId(patternId);
+    setIsPatternLibraryOpen(true);
+  };
 
   const buildSuggestionSnapshot = () => {
     const state = useAppStore.getState();
@@ -535,15 +601,12 @@ export default function ConversationStream() {
         }
       }
       
-      const activePattern = context.active_pattern ? patterns[context.active_pattern] : null;
-
       const responseText = await generateResponseStream(
         systemPrompt,
         allEffectiveNodes,
         userMsg,
-        activePattern,
+        patternAppendix,
         (delta) => updateNodeContent(assistantNodeId, delta, 'append'),
-        context.active_step_index,
         {
           maxChars: getStreamCharLimit(),
           signal: streamAbortController.signal,
@@ -557,13 +620,6 @@ export default function ConversationStream() {
         updateNodeContent(assistantNodeId, 'No response generated.', 'replace');
       } else if (wasAutoTruncatedRef.current) {
         updateNodeContent(assistantNodeId, '\n\n[输出已自动截断，可直接继续提问。]', 'append');
-      }
-      
-      // Auto-advance step if pattern is active
-      if (activePattern && context.active_step_index !== undefined) {
-        if (context.active_step_index < activePattern.steps.length - 1) {
-          setActiveStep(project.project_id, context.active_step_index + 1);
-        }
       }
       repairMainlineIfNeeded();
     } catch (error) {
@@ -751,62 +807,160 @@ export default function ConversationStream() {
     setPendingBranchSuggestion(null);
   };
 
-  const handleNodeClick = (e: React.MouseEvent, nodeId: string) => {
-    if (e.shiftKey && lastSelectedId) {
-      // Range selection
-      const startIndex = visibleNodes.findIndex(n => n.node_id === lastSelectedId);
-      const endIndex = visibleNodes.findIndex(n => n.node_id === nodeId);
-      if (startIndex !== -1 && endIndex !== -1) {
-        const start = Math.min(startIndex, endIndex);
-        const end = Math.max(startIndex, endIndex);
-        const newSelection = new Set(selectedNodeIds);
-        for (let i = start; i <= end; i++) {
-          newSelection.add(visibleNodes[i].node_id);
-        }
-        setSelectedNodeIds(newSelection);
-      }
-    } else if (e.metaKey || e.ctrlKey) {
-      // Toggle single
-      const newSelection = new Set(selectedNodeIds);
-      if (newSelection.has(nodeId)) {
-        newSelection.delete(nodeId);
-      } else {
-        newSelection.add(nodeId);
-      }
-      setSelectedNodeIds(newSelection);
-      setLastSelectedId(nodeId);
-    } else {
-      // Clear selection if clicking without modifiers
-      if (selectedNodeIds.size > 0) {
-        setSelectedNodeIds(new Set());
-        setLastSelectedId(null);
-      }
+  const handleTogglePatternEnabled = (pattern: Pattern) => {
+    if (pattern.requires_human_review && pattern.review_status !== 'approved') {
+      setInlineNotice({
+        id: `pattern-review-${pattern.pattern_id}-${Date.now()}`,
+        title: 'Pattern review required',
+        message: 'This pattern needs human review before it can be enabled.',
+      });
+      return;
+    }
+    if (context.enabled_patterns_by_type[pattern.type] === pattern.pattern_id) {
+      disablePatternForType(project.project_id, context.context_id, pattern.type);
+      return;
+    }
+    enablePatternForType(project.project_id, context.context_id, pattern.type, pattern.pattern_id);
+  };
+
+  const handleSavePatternEdits = (approve = false) => {
+    if (!viewingPatternId) return;
+    updatePattern(viewingPatternId, {
+      name: editName.trim() || 'Untitled Pattern',
+      instruction: editInstruction.trim(),
+      example: editExample.trim(),
+    });
+    if (approve) {
+      approvePattern(viewingPatternId);
     }
   };
 
-  const handleSavePattern = async () => {
-    if (selectedNodeIds.size === 0) return;
-    setIsExtractingPattern(true);
-    try {
-      const selectedNodes = visibleNodes.filter(n => selectedNodeIds.has(n.node_id));
-      const { name, guidance_text, steps } = await extractPattern(selectedNodes);
-      const fromId = selectedNodes[0].node_id;
-      const toId = selectedNodes[selectedNodes.length - 1].node_id;
-      const patternId = createPattern(project.project_id, name, fromId, toId, guidance_text, steps);
-      setActivePattern(project.project_id, patternId);
-      setSelectedNodeIds(new Set());
-    } catch (error) {
-      console.error(error);
-      alert('Failed to extract pattern.');
-    } finally {
-      setIsExtractingPattern(false);
-    }
+  const renderPatternEditor = () => {
+    if (!viewingPatternId || !patterns[viewingPatternId]) return null;
+    const activePattern = patterns[viewingPatternId];
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+          <label className="flex flex-col gap-1">
+            <span className="text-zinc-500">Name</span>
+            <input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              className="border border-zinc-300 rounded px-2 py-1.5"
+            />
+          </label>
+          <div className="flex flex-col gap-1">
+            <span className="text-zinc-500">Type</span>
+            <div className="border border-zinc-200 rounded px-2 py-1.5 bg-zinc-50 text-zinc-700">
+              {PATTERN_TYPE_LABEL[activePattern.type]}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1 md:col-span-2">
+            <span className="text-zinc-500">Requires Human Review</span>
+            <div className="border border-zinc-200 rounded px-2 py-1.5 bg-zinc-50 text-zinc-700">
+              {activePattern.requires_human_review ? 'true' : 'false'} · {activePattern.review_status}
+            </div>
+          </div>
+        </div>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-zinc-500">Instruction</span>
+          <textarea
+            value={editInstruction}
+            onChange={(e) => setEditInstruction(e.target.value)}
+            rows={8}
+            className="border border-zinc-300 rounded px-2 py-1.5 resize-y"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-zinc-500">Example</span>
+          <textarea
+            value={editExample}
+            onChange={(e) => setEditExample(e.target.value)}
+            rows={6}
+            className="border border-zinc-300 rounded px-2 py-1.5 resize-y"
+          />
+        </label>
+
+        <div className="flex justify-between items-center">
+          <button
+            onClick={() => {
+              const currentIndex = globalPatternList.findIndex((pattern) => pattern.pattern_id === activePattern.pattern_id);
+              deletePattern(activePattern.pattern_id);
+              const nextPattern = globalPatternList.find((pattern, index) => index !== currentIndex && pattern.pattern_id !== activePattern.pattern_id);
+              if (nextPattern) {
+                setViewingPatternId(nextPattern.pattern_id);
+              } else {
+                setViewingPatternId(null);
+                setIsPatternLibraryOpen(false);
+              }
+            }}
+            className="px-3 py-1.5 text-sm rounded border border-red-300 text-red-700 hover:bg-red-50"
+          >
+            Delete
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleSavePatternEdits(false)}
+              className="px-3 py-1.5 text-sm rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+            >
+              Save
+            </button>
+            {activePattern.requires_human_review && activePattern.review_status !== 'approved' && (
+              <button
+                onClick={() => handleSavePatternEdits(true)}
+                className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 flex items-center gap-1"
+              >
+                <Check size={14} />
+                Approve & Save
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   };
 
-  const activePattern = context.active_pattern ? patterns[context.active_pattern] : null;
+  useEffect(() => {
+    if (!inlineNotice) return;
+    const timeout = window.setTimeout(() => {
+      setInlineNotice((current) => (current?.id === inlineNotice.id ? null : current));
+    }, 3200);
+    return () => window.clearTimeout(timeout);
+  }, [inlineNotice]);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-white relative">
+      {inlineNotice && (
+        <div className="absolute top-4 right-20 z-20 w-[min(20rem,calc(100%-2rem))]">
+          <div className="rounded-[1.15rem] border border-amber-200 bg-white/95 px-3 py-3 shadow-[0_16px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-700">
+                <TriangleAlert size={16} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-600">Patterns</p>
+                    <h3 className="mt-1 text-sm font-semibold text-zinc-900">{inlineNotice.title}</h3>
+                  </div>
+                  <button
+                    onClick={() => setInlineNotice(null)}
+                    className="rounded-full p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
+                    aria-label="Dismiss notice"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <p className="mt-2 text-sm leading-5 text-zinc-700">{inlineNotice.message}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Status Bar for Branch Mode */}
       {!isMainline && currentBranch && (
         <div className="bg-indigo-50 border-b border-indigo-100 p-3 flex items-center justify-between shadow-sm z-10">
@@ -845,42 +999,8 @@ export default function ConversationStream() {
         </div>
       )}
 
-      {/* Selection Action Bar */}
-      {selectedNodeIds.size > 0 && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-zinc-900 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-4 z-20">
-          <span className="text-sm font-medium">{selectedNodeIds.size} selected</span>
-          <div className="h-4 w-px bg-zinc-700" />
-          <button 
-            onClick={() => {
-              batchToggleInclusion(project.project_id, Array.from(selectedNodeIds), 'exclude');
-              setSelectedNodeIds(new Set());
-            }}
-            className="text-sm hover:text-red-400 transition-colors flex items-center gap-1"
-          >
-            <EyeOff size={14} /> Exclude
-          </button>
-          <button 
-            onClick={() => {
-              batchToggleInclusion(project.project_id, Array.from(selectedNodeIds), 'include');
-              setSelectedNodeIds(new Set());
-            }}
-            className="text-sm hover:text-emerald-400 transition-colors flex items-center gap-1"
-          >
-            <Eye size={14} /> Include
-          </button>
-          <div className="h-4 w-px bg-zinc-700" />
-          <button 
-            onClick={handleSavePattern}
-            disabled={isExtractingPattern}
-            className="text-sm hover:text-indigo-400 transition-colors flex items-center gap-1 disabled:opacity-50"
-          >
-            <Save size={14} /> {isExtractingPattern ? 'Extracting...' : 'Save as Pattern'}
-          </button>
-        </div>
-      )}
-
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6" onClick={() => { if(selectedNodeIds.size > 0) setSelectedNodeIds(new Set()) }}>
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {branchSuggestionNotice && (
           <div className="max-w-3xl mx-auto mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             {branchSuggestionNotice}
@@ -896,7 +1016,6 @@ export default function ConversationStream() {
         ) : (
           visibleNodes.map((node) => {
             const isExcluded = context.excluded_nodes.includes(node.node_id);
-            const isSelected = selectedNodeIds.has(node.node_id);
             const inlineSuggestionTargetNodeId = pendingBranchSuggestion?.nodeIdsToMove[1];
             const showInlineSuggestion =
               !!pendingBranchSuggestion &&
@@ -906,12 +1025,11 @@ export default function ConversationStream() {
               <div
                 key={node.node_id}
                 id={`node-${node.node_id}`}
-                onClick={(e) => { e.stopPropagation(); handleNodeClick(e, node.node_id); }}
+                onClick={(e) => { e.stopPropagation(); }}
                 className={clsx(
-                  "flex flex-col max-w-3xl mx-auto group cursor-pointer transition-all",
+                  'flex flex-col max-w-3xl mx-auto group transition-all cursor-default',
                   node.role === 'user' ? "items-end" : "items-start",
-                  isExcluded && "opacity-40",
-                  isSelected && "ring-2 ring-indigo-500 ring-offset-2 rounded-2xl"
+                  isExcluded && "opacity-40"
                 )}
               >
                 <div className={clsx("flex items-center gap-2 mb-1 px-1", node.role === 'user' && "flex-row-reverse")}>
@@ -936,10 +1054,10 @@ export default function ConversationStream() {
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleNodeInclusion(project.project_id, node.node_id); }}
                     className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500 transition-all text-xs flex items-center gap-1"
-                    title={isExcluded ? "Include in Context" : "Exclude from Context"}
+                    title="Cycle context state"
                   >
                     {isExcluded ? <Eye size={12} /> : <EyeOff size={12} />}
-                    {isExcluded ? "Include" : "Exclude"}
+                    Context
                   </button>
                 </div>
                 <div
@@ -994,47 +1112,83 @@ export default function ConversationStream() {
         <div ref={endOfMessagesRef} />
       </div>
 
-      {/* Pattern Guidance UI */}
-      {activePattern && context.active_step_index !== undefined && (
-        <div className="bg-emerald-50 border-t border-emerald-100 p-3 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-emerald-800 uppercase tracking-wider">
-              Active Pattern: {activePattern.name}
-            </span>
-            <button 
-              onClick={() => setActivePattern(project.project_id, null)}
-              className="text-xs text-emerald-600 hover:text-emerald-800"
-            >
-              Clear
-            </button>
-          </div>
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {activePattern.steps.map((step, idx) => (
-              <div 
-                key={idx}
-                className={clsx(
-                  "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs whitespace-nowrap cursor-pointer transition-colors",
-                  idx === context.active_step_index 
-                    ? "bg-emerald-600 text-white font-medium shadow-sm"
-                    : idx < context.active_step_index
-                    ? "bg-emerald-200 text-emerald-800"
-                    : "bg-emerald-100 text-emerald-600 hover:bg-emerald-200"
-                )}
-                onClick={() => setActiveStep(project.project_id, idx)}
-              >
-                {idx < context.active_step_index ? <CheckCircle2 size={12} /> : <Circle size={12} />}
-                Step {idx + 1}
-              </div>
-            ))}
-          </div>
-          <div className="text-sm text-emerald-900 bg-white/60 p-2 rounded-md border border-emerald-200/50">
-            {activePattern.steps[context.active_step_index]}
+      {/* Input Area */}
+      <div className="p-4 bg-white border-t border-zinc-200 space-y-3">
+        <div className="max-w-3xl mx-auto overflow-x-auto">
+          <div className="flex items-center gap-2 min-h-8">
+            {globalPatternList.length === 0 ? (
+              <span className="text-xs text-zinc-400">No patterns yet.</span>
+            ) : (
+              <>
+                {visiblePatternList.map((pattern) => {
+                const isEnabled = context.enabled_patterns_by_type[pattern.type] === pattern.pattern_id;
+                const needsReview = pattern.requires_human_review && pattern.review_status !== 'approved';
+                return (
+                  <div key={pattern.pattern_id} className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleTogglePatternEnabled(pattern)}
+                      onDoubleClick={() => openPatternPanel(pattern.pattern_id)}
+                      className={clsx(
+                        'px-3 py-1.5 rounded-full text-xs font-medium border whitespace-nowrap transition-colors',
+                        isEnabled
+                          ? needsReview
+                            ? 'bg-zinc-900 !text-white border-amber-300'
+                            : 'bg-zinc-900 !text-white border-zinc-900'
+                          : needsReview
+                            ? 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
+                            : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-100'
+                      )}
+                      title={needsReview ? 'Needs review before enabling' : 'Toggle pattern for next prompt'}
+                    >
+                      <span className={clsx(isEnabled && '!text-white')}>
+                        {PATTERN_TYPE_LABEL[pattern.type]} · {pattern.name}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+                <div className="ml-auto flex items-center gap-1.5 pl-2">
+                  {totalPatternPages > 1 && (
+                    <>
+                      <button
+                        onClick={() => setPatternPage((prev) => Math.max(0, prev - 1))}
+                        disabled={patternPage === 0}
+                        className="h-8 w-8 rounded-full border border-zinc-300 text-zinc-600 hover:bg-zinc-100 disabled:text-zinc-300 disabled:hover:bg-transparent"
+                        aria-label="Previous patterns page"
+                      >
+                        <ChevronLeft size={15} className="mx-auto" />
+                      </button>
+                      <span className="text-[11px] text-zinc-500 tabular-nums">
+                        {patternPage + 1}/{totalPatternPages}
+                      </span>
+                      <button
+                        onClick={() => setPatternPage((prev) => Math.min(totalPatternPages - 1, prev + 1))}
+                        disabled={patternPage >= totalPatternPages - 1}
+                        className="h-8 w-8 rounded-full border border-zinc-300 text-zinc-600 hover:bg-zinc-100 disabled:text-zinc-300 disabled:hover:bg-transparent"
+                        aria-label="Next patterns page"
+                      >
+                        <ChevronRight size={15} className="mx-auto" />
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => {
+                      setIsPatternLibraryOpen(true);
+                      if (!viewingPatternId && globalPatternList[0]) {
+                        setViewingPatternId(globalPatternList[0].pattern_id);
+                      }
+                    }}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-300 px-3 text-[11px] font-medium text-zinc-700 hover:bg-zinc-100"
+                  >
+                    <Rows3 size={14} />
+                    All Patterns
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
-      )}
 
-      {/* Input Area */}
-      <div className="p-4 bg-white border-t border-zinc-200">
         <form onSubmit={handleSend} className="max-w-3xl mx-auto relative flex items-end gap-2">
           <textarea
             value={input}
@@ -1045,7 +1199,7 @@ export default function ConversationStream() {
                 handleSend(e);
               }
             }}
-            placeholder="Type a message... (Shift+Enter for new line, Cmd/Ctrl+Click to select nodes)"
+            placeholder="Type a message... (Shift+Enter for new line)"
             className="w-full max-h-48 min-h-[56px] p-4 pr-24 bg-zinc-50 border border-zinc-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-transparent resize-none text-[15px]"
             rows={1}
           />
@@ -1068,6 +1222,66 @@ export default function ConversationStream() {
           </button>
         </form>
       </div>
+
+      {isPatternLibraryOpen && viewingPatternId && patterns[viewingPatternId] && (
+        <div className="absolute inset-0 z-30 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-5xl bg-white rounded-xl shadow-xl border border-zinc-200 p-5 max-h-[88vh] overflow-hidden">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-zinc-900">Pattern Library</h3>
+              <button
+                onClick={() => setIsPatternLibraryOpen(false)}
+                className="p-1 rounded hover:bg-zinc-100 text-zinc-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="mt-4 grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-2 max-h-[72vh] overflow-y-auto">
+                <div className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-zinc-500">
+                  Patterns
+                </div>
+                <div className="space-y-1.5">
+                  {globalPatternList.map((pattern) => {
+                    const isActive = pattern.pattern_id === viewingPatternId;
+                    return (
+                      <button
+                        key={pattern.pattern_id}
+                        onClick={() => setViewingPatternId(pattern.pattern_id)}
+                        className={clsx(
+                          "w-full rounded-2xl border px-3 py-2 text-left transition-colors",
+                          isActive
+                            ? "border-zinc-900 bg-zinc-900 text-white"
+                            : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-100"
+                        )}
+                      >
+                        <div
+                          className={clsx(
+                            "text-[11px] font-semibold uppercase tracking-[0.18em]",
+                            isActive ? "text-white/75" : "text-zinc-500"
+                          )}
+                        >
+                          {PATTERN_TYPE_LABEL[pattern.type]}
+                        </div>
+                        <div
+                          className={clsx(
+                            "mt-1 text-sm font-medium truncate",
+                            isActive ? "text-white" : "text-zinc-900"
+                          )}
+                        >
+                          {pattern.name}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="max-h-[72vh] overflow-y-auto rounded-2xl border border-zinc-200 p-4">
+                {renderPatternEditor()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

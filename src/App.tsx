@@ -12,7 +12,8 @@ import { PanelRightClose, PanelRightOpen, Maximize2, Minimize2 } from 'lucide-re
 import clsx from 'clsx';
 import { getActiveUserId, setActiveUserId } from './utils/branchFeedbackDataset';
 import { startChatHistorySync } from './services/chatHistory';
-import { rehydrateStoreForActiveUser } from './store';
+import { pullRemotePatterns, startPatternSync } from './services/patternSync';
+import { mergePatternsFromRemoteRecords, rehydrateStoreForActiveUser } from './store';
 
 export default function App() {
   const isManageRoute = typeof window !== 'undefined' && window.location.pathname === '/manage';
@@ -28,19 +29,26 @@ export default function App() {
   const [manageAuthError, setManageAuthError] = useState('');
   const [isManageAuthed, setIsManageAuthed] = useState(false);
 
+  const syncPatternsFromRemote = async () => {
+    const records = await pullRemotePatterns();
+    mergePatternsFromRemoteRecords(records);
+  };
+
   useEffect(() => {
     const previous = getActiveUserId();
     if (!previous) return;
     const normalized = previous.trim();
     if (!normalized) return;
     setUserIdInput(normalized);
-    setActiveUserIdState(normalized);
-    void rehydrateStoreForActiveUser();
   }, []);
 
   useEffect(() => {
     const stopSync = startChatHistorySync();
-    return stopSync;
+    const stopPatternSync = startPatternSync();
+    return () => {
+      stopSync();
+      stopPatternSync();
+    };
   }, []);
 
   useEffect(() => {
@@ -77,8 +85,42 @@ export default function App() {
     if (!normalized) return;
     setActiveUserId(normalized);
     await rehydrateStoreForActiveUser();
+    await syncPatternsFromRemote();
     setActiveUserIdState(normalized);
   };
+
+  useEffect(() => {
+    if (!activeUserId) return;
+
+    void syncPatternsFromRemote();
+
+    const onOnline = () => {
+      void syncPatternsFromRemote();
+    };
+
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        void syncPatternsFromRemote();
+      }
+    };
+
+    window.addEventListener('online', onOnline);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisible);
+    }
+
+    const timer = window.setInterval(() => {
+      void syncPatternsFromRemote();
+    }, 15000);
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisible);
+      }
+      window.clearInterval(timer);
+    };
+  }, [activeUserId]);
 
   const handleManageAuth = (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,6 +133,12 @@ export default function App() {
     }
     setManageAuthError('');
     setIsManageAuthed(true);
+  };
+
+  const handleSwitchUser = () => {
+    if (!activeUserId) return;
+    setUserIdInput(activeUserId);
+    setActiveUserIdState(null);
   };
 
   if (!activeUserId) {
@@ -124,6 +172,17 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full bg-zinc-50 text-zinc-900 overflow-hidden font-sans flex-col">
+      {!isManageRoute && activeUserId && (
+        <div className="h-10 border-b border-zinc-200 bg-white px-4 flex items-center justify-end gap-2 text-xs text-zinc-600">
+          <span>Current User: <strong className="text-zinc-800">{activeUserId}</strong></span>
+          <button
+            onClick={handleSwitchUser}
+            className="px-2 py-1 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+          >
+            Switch
+          </button>
+        </div>
+      )}
       {isManageRoute ? (
         isManageAuthed ? (
           <div className="flex-1 min-h-0">

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Node, Pattern } from '../types';
+import { Node, PatternType } from '../types';
 import { BranchSuggestionDecision, parseBranchSuggestionDecision } from '../utils/branchSuggestion';
 import { appendDeltaWithinLimit } from './streamLimit';
 import { getModelProviderPreference, getOpenAIModelOverride } from './modelProvider';
@@ -169,19 +169,112 @@ const parseJsonFromText = (text: string) => {
   }
 };
 
+type ExtractedPattern = {
+  name: string;
+  requires_human_review: boolean;
+  instruction: string;
+  example: string;
+};
+
+const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
+  reasoning: 'Reasoning',
+  task_sop: 'Task SOP',
+  context_case: 'Context Case',
+};
+
+const PATTERN_SYSTEM_PROMPTS: Record<PatternType, string> = {
+  reasoning:
+    'You are a prompt-extractor that derives a reusable, domain-agnostic REASONING SOP from a conversation.\n\n' +
+    'Purpose: This protocol is meant to be appended to another LLM system prompt so future tasks follow the same reasoning style and step order.\n\n' +
+    'Output MUST be valid JSON with exactly 4 keys: name, requires_human_review, instruction, example.\n' +
+    '- name: 2-6 words, concise Title Case label.\n' +
+    '- requires_human_review: boolean only (true or false).\n' +
+    '- instruction: imperative, domain-agnostic, reusable reasoning SOP.\n' +
+    '- example: concise cross-task demonstration.\n\n' +
+    'Constraints:\n' +
+    '- Keep domain-agnostic language.\n' +
+    '- Prefer 5-7 steps embedded in a compact text block, not JSON arrays.\n' +
+    '- Always return best effort.\n' +
+    '- If confidence is low, set requires_human_review=true and explicitly note uncertainty.\n' +
+    '- If extraction is weak or incomplete, still return valid JSON and set requires_human_review=true.\n' +
+    'Return only the JSON object.',
+  task_sop:
+    'You are a prompt-extractor that derives a reusable TASK SOP from a conversation.\n\n' +
+    'Purpose: append this protocol to another LLM system prompt so when the same task type appears, the model follows a consistent procedure and checks.\n\n' +
+    'Output MUST be valid JSON with exactly 4 keys: name, requires_human_review, instruction, example.\n' +
+    '- name: 2-6 words, concise Title Case label.\n' +
+    '- requires_human_review: boolean only (true or false).\n' +
+    '- instruction: include required inputs, ordered steps, intermediate artifacts, and final quality checklist in compact text.\n' +
+    '- example: same task type as inferred SOP, not a mismatched task.\n\n' +
+    'Constraints:\n' +
+    '- Infer the most plausible task type from the conversation.\n' +
+    '- Always return best effort.\n' +
+    '- If task type is ambiguous or incomplete, set requires_human_review=true and phrase conservatively.\n' +
+    '- If extraction is weak or incomplete, still return valid JSON and set requires_human_review=true.\n' +
+    'Return only the JSON object.',
+  context_case:
+    'You are a prompt-extractor that compresses a conversation into a CONTEXT CASE for cross-session continuation.\n\n' +
+    'Output MUST be valid JSON with exactly 4 keys: name, requires_human_review, instruction, example.\n' +
+    '- name: 2-6 words, concise Title Case label.\n' +
+    '- requires_human_review: boolean only (true or false).\n' +
+    '- instruction: appendable context block including background, key points, current status, open questions, and next actions.\n' +
+    '- example: how a future LLM should use this context case.\n\n' +
+    'Constraints:\n' +
+    '- Do not invent facts.\n' +
+    '- Preserve only supported information.\n' +
+    '- Always return best effort if any coherent thread exists.\n' +
+    '- If ambiguous status or multiple threads, set requires_human_review=true and note ambiguity.\n' +
+    '- If extraction is weak or incomplete, still return valid JSON and set requires_human_review=true.\n' +
+    'Return only the JSON object.',
+};
+
+const buildFallbackPattern = (type: PatternType): ExtractedPattern => {
+  const label = PATTERN_TYPE_LABEL[type];
+  return {
+    name: `${label} Draft`,
+    requires_human_review: true,
+    instruction:
+      `This ${label} extraction is a conservative fallback because the source conversation was incomplete or ambiguous. ` +
+      'Before operational use, review and refine this instruction with explicit constraints and steps.',
+    example:
+      'In a future turn, append this draft after the main system prompt, then manually verify whether each instruction line is still valid for the new task.',
+  };
+};
+
+const sanitizeExtractedPattern = (raw: unknown, type: PatternType): ExtractedPattern => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return buildFallbackPattern(type);
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowedKeys = ['name', 'requires_human_review', 'instruction', 'example'];
+  const hasOnlyAllowedKeys = Object.keys(obj).every((k) => allowedKeys.includes(k));
+  const hasRequiredKeys = allowedKeys.every((k) => k in obj);
+  if (!hasOnlyAllowedKeys || !hasRequiredKeys) {
+    return buildFallbackPattern(type);
+  }
+  if (typeof obj.name !== 'string' || typeof obj.instruction !== 'string' || typeof obj.example !== 'string') {
+    return buildFallbackPattern(type);
+  }
+  if (typeof obj.requires_human_review !== 'boolean') {
+    return buildFallbackPattern(type);
+  }
+  return {
+    name: obj.name.trim() || `${PATTERN_TYPE_LABEL[type]} Draft`,
+    requires_human_review: obj.requires_human_review,
+    instruction: obj.instruction.trim(),
+    example: obj.example.trim(),
+  };
+};
+
 export const generateResponse = async (
   systemPrompt: string,
   contextNodes: Node[],
   userMessage: string,
-  activePattern: Pattern | null,
-  activeStepIndex?: number
+  patternPromptAppendix?: string
 ): Promise<string> => {
   let fullSystemPrompt = systemPrompt;
-  if (activePattern) {
-    fullSystemPrompt += `\n\n[STRICT WORKFLOW GUIDANCE]:\n${activePattern.guidance_text}`;
-    if (activeStepIndex !== undefined && activeStepIndex < activePattern.steps.length) {
-      fullSystemPrompt += `\n\nCURRENT STEP TO EXECUTE: ${activePattern.steps[activeStepIndex]}`;
-    }
+  if (patternPromptAppendix?.trim()) {
+    fullSystemPrompt += `\n\n${patternPromptAppendix.trim()}`;
   }
 
   const messages = mapNodesToMessages(contextNodes);
@@ -202,9 +295,8 @@ export const generateResponseStream = async (
   systemPrompt: string,
   contextNodes: Node[],
   userMessage: string,
-  activePattern: Pattern | null,
+  patternPromptAppendix: string | undefined,
   onDelta: (delta: string) => void,
-  activeStepIndex?: number,
   options?: {
     maxChars?: number;
     signal?: AbortSignal;
@@ -212,11 +304,8 @@ export const generateResponseStream = async (
   }
 ): Promise<string> => {
   let fullSystemPrompt = systemPrompt;
-  if (activePattern) {
-    fullSystemPrompt += `\n\n[STRICT WORKFLOW GUIDANCE]:\n${activePattern.guidance_text}`;
-    if (activeStepIndex !== undefined && activeStepIndex < activePattern.steps.length) {
-      fullSystemPrompt += `\n\nCURRENT STEP TO EXECUTE: ${activePattern.steps[activeStepIndex]}`;
-    }
+  if (patternPromptAppendix?.trim()) {
+    fullSystemPrompt += `\n\n${patternPromptAppendix.trim()}`;
   }
 
   const messages = mapNodesToMessages(contextNodes);
@@ -247,18 +336,22 @@ export const generateMainlineSummary = async (contextNodes: Node[]): Promise<str
   }
 };
 
-export const extractPattern = async (contextNodes: Node[]): Promise<{ name: string, guidance_text: string, steps: string[] }> => {
+export const extractPatternByType = async (
+  contextNodes: Node[],
+  type: PatternType
+): Promise<ExtractedPattern> => {
   const messages = mapNodesToMessages(contextNodes);
 
   try {
     const result = await callOpenAICompat(
-      'Analyze the provided conversation and extract a reusable Standard Operating Procedure (SOP) or workflow pattern. Return strict JSON only with shape: {"name":"...","guidance_text":"...","steps":["..."]}.',
+      PATTERN_SYSTEM_PROMPTS[type],
       messages
     );
-    return parseJsonFromText(result);
+    const parsed = parseJsonFromText(result);
+    return sanitizeExtractedPattern(parsed, type);
   } catch (error) {
     console.error('Error extracting pattern:', error);
-    throw error;
+    return buildFallbackPattern(type);
   }
 };
 

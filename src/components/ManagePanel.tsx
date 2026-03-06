@@ -13,6 +13,7 @@ import {
   setBranchDebugEnabled,
 } from '../utils/branchFeedbackDataset';
 import { readChatHistorySyncState } from '../services/chatHistory';
+import { readPatternSyncState } from '../services/patternSync';
 import {
   getModelProviderPreference,
   getOpenAIModelOverride,
@@ -32,6 +33,7 @@ export default function ManagePanel() {
 
   const activeUserId = getActiveUserId() || '';
   const chatSync = readChatHistorySyncState();
+  const patternSync = readPatternSyncState();
   const users = useMemo(() => {
     const byUser = readAllBranchFeedbackByUser();
     const profiles = readAllPersonaProfiles();
@@ -53,7 +55,11 @@ export default function ManagePanel() {
   useEffect(() => {
     const onSyncUpdate = () => setRefreshTick((n) => n + 1);
     window.addEventListener('chat-history-sync-updated', onSyncUpdate);
-    return () => window.removeEventListener('chat-history-sync-updated', onSyncUpdate);
+    window.addEventListener('pattern-sync-updated', onSyncUpdate);
+    return () => {
+      window.removeEventListener('chat-history-sync-updated', onSyncUpdate);
+      window.removeEventListener('pattern-sync-updated', onSyncUpdate);
+    };
   }, []);
 
   const handleToggleDebug = (enabled: boolean) => {
@@ -228,6 +234,21 @@ export default function ManagePanel() {
             <div>last_success_at: {chatSync.last_success_at || 'N/A'}</div>
             <div>last_error_at: {chatSync.last_error_at || 'N/A'}</div>
             <div>last_error_message: {chatSync.last_error_message || 'None'}</div>
+          </div>
+        </div>
+
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold mb-3">Pattern Sync Status</h2>
+          <div className="text-sm space-y-1">
+            <div>pending_queue: {patternSync.pending_count}</div>
+            <div>last_attempt_at: {patternSync.last_attempt_at || 'N/A'}</div>
+            <div>last_success_at: {patternSync.last_success_at || 'N/A'}</div>
+            <div>last_error_at: {patternSync.last_error_at || 'N/A'}</div>
+            <div>last_error_message: {patternSync.last_error_message || 'None'}</div>
+            <div>last_pull_attempt_at: {patternSync.last_pull_attempt_at || 'N/A'}</div>
+            <div>last_pull_success_at: {patternSync.last_pull_success_at || 'N/A'}</div>
+            <div>last_pull_error_at: {patternSync.last_pull_error_at || 'N/A'}</div>
+            <div>last_pull_error_message: {patternSync.last_pull_error_message || 'None'}</div>
           </div>
         </div>
 

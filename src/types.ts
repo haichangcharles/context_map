@@ -1,4 +1,16 @@
 export type Role = 'user' | 'assistant' | 'system';
+export type PatternType = 'reasoning' | 'task_sop' | 'context_case';
+export type PatternReviewStatus = 'pending' | 'approved';
+export type SelectionNoticeTone = 'info' | 'success' | 'warning' | 'error';
+
+export interface SelectionNotice {
+  id: string;
+  tone: SelectionNoticeTone;
+  title: string;
+  message: string;
+  details?: string;
+  defaultExpanded?: boolean;
+}
 
 export interface Project {
   project_id: string;
@@ -40,17 +52,22 @@ export interface ContextView {
   base_path: 'mainline' | string; // 'mainline' or branch_id
   included_nodes: string[];
   excluded_nodes: string[];
-  active_pattern: string | null;
-  active_step_index?: number;
+  enabled_patterns_by_type: Partial<Record<PatternType, string>>;
 }
 
 export interface Pattern {
   pattern_id: string;
+  type: PatternType;
   name: string;
+  requires_human_review: boolean;
+  instruction: string;
+  example: string;
+  review_status: PatternReviewStatus;
   source_line: {
     from: string;
     to: string;
   };
-  guidance_text: string;
-  steps: string[];
+  created_at: string;
+  updated_at: string;
+  created_from_project_id?: string;
 }

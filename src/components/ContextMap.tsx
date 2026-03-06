@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useAppStore } from '../store';
-import { ReactFlow, Background, Controls, Node as FlowNode, Edge, Position, MarkerType, useNodesState, useEdgesState, Handle, ReactFlowInstance, SelectionMode } from '@xyflow/react';
+import { ReactFlow, Background, Controls, Node as FlowNode, Edge, Position, MarkerType, useNodesState, useEdgesState, Handle, ReactFlowInstance, SelectionMode, applyNodeChanges, type NodeChange } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Node, Branch } from '../types';
+import { Node, Branch, PatternType, SelectionNotice } from '../types';
 import clsx from 'clsx';
-import { Layers, Eye, EyeOff, GitBranch, MousePointerSquareDashed, WandSparkles, Undo2, Redo2, RotateCcw, Maximize2, History } from 'lucide-react';
+import { Layers, Eye, EyeOff, GitBranch, MousePointerSquareDashed, WandSparkles, Undo2, Redo2, RotateCcw, Maximize2, History, ArrowRightLeft, Sparkles, X, Info, CheckCircle2, TriangleAlert, CircleAlert } from 'lucide-react';
 import dagre from 'dagre';
 import { buildQAPair, logBranchDebug, logContextMapDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
+import { extractPatternByType } from '../services/gemini';
 
 // Custom Node Component
 const CustomNode = ({ data }: { data: any }) => {
@@ -14,6 +15,7 @@ const CustomNode = ({ data }: { data: any }) => {
   const isIncluded = data.isIncluded;
   const isActive = data.isActive; // In the current base path
   const isSelectedStart = data.isSelectedStart;
+  const isSelected = data.isSelected;
   
   return (
     <div 
@@ -22,9 +24,10 @@ const CustomNode = ({ data }: { data: any }) => {
         isActive ? "border-indigo-500 bg-indigo-50" : "border-zinc-200 bg-white",
         isExcluded && "opacity-50 border-dashed border-red-300 bg-red-50",
         isIncluded && !isActive && "border-emerald-500 bg-emerald-50",
+        isSelected && "border-sky-500 ring-2 ring-sky-300 ring-offset-1 shadow-[0_0_0_1px_rgba(14,165,233,0.25)]",
         isSelectedStart && "ring-4 ring-orange-400 ring-offset-2"
       )}
-      onClick={data.onToggle}
+      onClick={data.onPrimaryClick}
       onContextMenu={data.onContextMenu}
     >
       <Handle type="target" position={Position.Top} className="w-2 h-2 bg-zinc-400" />
@@ -37,6 +40,11 @@ const CustomNode = ({ data }: { data: any }) => {
       <div className="text-zinc-600 truncate">
         {data.content}
       </div>
+      {isSelected && (
+        <div className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-white font-medium leading-none">
+          ✓
+        </div>
+      )}
       {data.branchId && (
         <div className="mt-1 flex items-center gap-1 text-[9px] text-indigo-600 bg-indigo-100 px-1 py-0.5 rounded-sm w-fit">
           <GitBranch size={10} />
@@ -59,6 +67,13 @@ const nodeTypes = {
 type LayoutMode = 'tree' | 'mindmap' | 'timeline';
 type BranchSide = 'left' | 'right';
 type BranchGroup = { branch: Branch; branchNodes: Node[] };
+const PATTERN_TYPE_ORDER: PatternType[] = ['reasoning', 'task_sop', 'context_case'];
+const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
+  reasoning: 'Reasoning',
+  task_sop: 'Task SOP',
+  context_case: 'Context Case',
+};
+const SELECTION_ACTIVE_SURFACE = 'bg-[#3a3a3c] border-[#3a3a3c] text-white';
 
 const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): string[] => {
   const chain: string[] = [];
@@ -356,17 +371,24 @@ const getStructuredPositions = (
 export default function ContextMap() {
   const {
     projects, activeProjectId, nodes, branches, mainlines, contexts,
-    toggleNodeInclusion, setMainlineEndpoints, createBranch, jumpToNode, batchToggleInclusion,
-    pastStructureSnapshots, futureStructureSnapshots, undoStructureChange, redoStructureChange, resetStructureToNatural, naturalMainlines
+    cycleNodeInclusionState, setMainlineEndpoints, createBranch, jumpToNode, batchToggleInclusion,
+    pastStructureSnapshots, futureStructureSnapshots, undoStructureChange, redoStructureChange, resetStructureToNatural, naturalMainlines,
+    createPattern
   } = useAppStore();
   
-  const [flowNodes, setFlowNodes, onNodesChange] = useNodesState([]);
+  const [flowNodes, setFlowNodes] = useNodesState([]);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState([]);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('tree');
   const [layoutRefreshToken, setLayoutRefreshToken] = useState(0);
   
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
   const [selectedStartId, setSelectedStartId] = useState<string | null>(null);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [pendingPatternType, setPendingPatternType] = useState<PatternType>('reasoning');
+  const [isExtractingPattern, setIsExtractingPattern] = useState(false);
+  const [selectionNotice, setSelectionNotice] = useState<SelectionNotice | null>(null);
+  const [isSelectionNoticeExpanded, setIsSelectionNoticeExpanded] = useState(false);
   
   const [rfInstance, setRfInstance] = useState<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -379,7 +401,83 @@ export default function ContextMap() {
   const isMainline = context?.base_path === 'mainline';
   const currentBranch = !isMainline && context ? branches[context.base_path] : null;
 
-  const onPaneClick = useCallback(() => setContextMenu(null), []);
+  const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
+
+  const emitSelectionNotice = useCallback((notice: SelectionNotice | null) => {
+    setSelectionNotice(notice);
+    setIsSelectionNoticeExpanded(notice?.defaultExpanded ?? false);
+  }, []);
+
+  const clearSelectionState = useCallback(() => {
+    setSelectedNodeIds([]);
+  }, []);
+
+  const finishSelectionMode = useCallback((options: { preserveNotice?: boolean } = {}) => {
+    clearSelectionState();
+    setIsSelectionMode(false);
+    if (!options.preserveNotice) {
+      emitSelectionNotice(null);
+    }
+  }, [clearSelectionState, emitSelectionNotice]);
+
+  const onPaneClick = useCallback((event: React.MouseEvent) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('.react-flow__node')) {
+      return;
+    }
+    setContextMenu(null);
+    if (isSelectionMode) {
+      clearSelectionState();
+    }
+  }, [clearSelectionState, isSelectionMode]);
+
+  const handleSelectionAction = useCallback((event: React.MouseEvent, nodeId: string) => {
+    event.stopPropagation();
+    setSelectedNodeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+      return Array.from(next);
+    });
+  }, []);
+
+  const handleNodePrimaryAction = useCallback((event: React.MouseEvent, nodeId: string) => {
+    setContextMenu(null);
+    if (!project) return;
+    if (isSelectionMode) {
+      handleSelectionAction(event, nodeId);
+      return;
+    }
+    cycleNodeInclusionState(project.project_id, nodeId);
+  }, [project, isSelectionMode, handleSelectionAction, cycleNodeInclusionState]);
+
+  const handleFlowNodesChange = useCallback((changes: NodeChange[]) => {
+    const selectChanges = changes.filter((change): change is Extract<NodeChange, { type: 'select' }> => change.type === 'select');
+    if (isSelectionMode && selectChanges.length > 0) {
+      setSelectedNodeIds((prev) => {
+        const next = new Set(prev);
+        selectChanges.forEach((change) => {
+          if (change.selected) next.add(change.id);
+        });
+        return Array.from(next);
+      });
+    }
+    setFlowNodes((prev) => {
+      const next = applyNodeChanges(changes.filter((change) => change.type !== 'select'), prev);
+      return next.map((n) => ({
+        ...n,
+        selected: false,
+        data: {
+          ...n.data,
+          isSelected: selectedNodeIdSet.has(n.id),
+          selectionIndex: undefined,
+        },
+      }));
+    });
+  }, [isSelectionMode, selectedNodeIdSet, setFlowNodes]);
 
   const resolvedMainlineNodeIds = useMemo(() => {
     if (!project) return [] as string[];
@@ -493,9 +591,35 @@ export default function ContextMap() {
         let changed = false;
         const updated = prevNodes.map((fn) => {
           const currentNode = nodes[fn.id];
-          if (!currentNode || fn.data.content === currentNode.content) return fn;
+          if (!currentNode) return fn;
+          const nextIsActive = activeNodeIds.has(fn.id);
+          const nextIsExcluded = context.excluded_nodes.includes(fn.id);
+          const nextIsIncluded = context.included_nodes.includes(fn.id);
+          const nextIsSelectedStart = fn.id === selectedStartId;
+          const nextIsSelected = selectedNodeIdSet.has(fn.id);
+          const dataChanged =
+            fn.data.content !== currentNode.content ||
+            fn.data.isActive !== nextIsActive ||
+            fn.data.isExcluded !== nextIsExcluded ||
+            fn.data.isIncluded !== nextIsIncluded ||
+            fn.data.isSelectedStart !== nextIsSelectedStart ||
+            fn.data.isSelected !== nextIsSelected;
+          if (!dataChanged) return fn;
           changed = true;
-          return { ...fn, data: { ...fn.data, content: currentNode.content } };
+          return {
+            ...fn,
+            selected: false,
+            data: {
+              ...fn.data,
+              content: currentNode.content,
+              isActive: nextIsActive,
+              isExcluded: nextIsExcluded,
+              isIncluded: nextIsIncluded,
+              isSelectedStart: nextIsSelectedStart,
+              isSelected: nextIsSelected,
+              selectionIndex: undefined,
+            },
+          };
         });
         return changed ? updated : prevNodes;
       });
@@ -657,7 +781,9 @@ export default function ContextMap() {
           isExcluded: context.excluded_nodes.includes(nodeId),
           isIncluded: context.included_nodes.includes(nodeId),
           isSelectedStart: nodeId === selectedStartId,
-          onToggle: () => toggleNodeInclusion(project.project_id, nodeId),
+          isSelected: selectedNodeIdSet.has(nodeId),
+          selectionIndex: undefined,
+          onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, nodeId),
           onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, nodeId),
         },
       });
@@ -691,7 +817,9 @@ export default function ContextMap() {
           isExcluded: context.excluded_nodes.includes(branch.anchor_node_id),
           isIncluded: context.included_nodes.includes(branch.anchor_node_id),
           isSelectedStart: branch.anchor_node_id === selectedStartId,
-          onToggle: () => toggleNodeInclusion(project.project_id, branch.anchor_node_id),
+          isSelected: selectedNodeIdSet.has(branch.anchor_node_id),
+          selectionIndex: undefined,
+          onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, branch.anchor_node_id),
           onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, branch.anchor_node_id),
         },
       });
@@ -715,7 +843,9 @@ export default function ContextMap() {
               isExcluded: context.excluded_nodes.includes(node.node_id),
               isIncluded: context.included_nodes.includes(node.node_id),
               isSelectedStart: node.node_id === selectedStartId,
-              onToggle: () => toggleNodeInclusion(project.project_id, node.node_id),
+              isSelected: selectedNodeIdSet.has(node.node_id),
+              selectionIndex: undefined,
+              onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, node.node_id),
               onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, node.node_id),
             },
           });
@@ -813,10 +943,16 @@ export default function ContextMap() {
           const nextNodes = structuredNodes.map((node) => {
             const prev = prevNodeById.get(node.id);
             const keepTreePosition = layoutMode === 'tree' && !modeChanged && !relayoutRequested && !structureChanged;
+            const isSelected = selectedNodeIdSet.has(node.id);
             return {
               ...node,
               position: keepTreePosition && prev ? prev.position : node.position,
-              selected: prev ? !!prev.selected : false,
+              selected: false,
+              data: {
+                ...node.data,
+                isSelected,
+                selectionIndex: undefined,
+              },
             };
           });
           logContextMapDebug('flow-commit', {
@@ -855,7 +991,15 @@ export default function ContextMap() {
         sourcePosition: Position.Bottom,
         position: { x: 0, y: idx * 120 },
       }));
-      setFlowNodes(fallbackNodes);
+      setFlowNodes(fallbackNodes.map((node) => ({
+        ...node,
+        selected: false,
+        data: {
+          ...node.data,
+          isSelected: selectedNodeIdSet.has(node.id),
+          selectionIndex: undefined,
+        },
+      })));
       setFlowEdges(initialEdges);
       layoutSuccess = true;
     }
@@ -866,7 +1010,7 @@ export default function ContextMap() {
       });
     }
 
-  }, [nodes, branches, mainlines, contexts, activeProjectId, selectedStartId, activeNodeIds, project, context, toggleNodeInclusion, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken, resolvedMainlineNodeIds, rfInstance]);
+  }, [nodes, branches, mainlines, contexts, activeProjectId, selectedStartId, activeNodeIds, project, context, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken, resolvedMainlineNodeIds, rfInstance, selectedNodeIdSet, handleNodePrimaryAction]);
 
   // Auto fit view on nodes change
   useEffect(() => {
@@ -912,29 +1056,104 @@ export default function ContextMap() {
     return () => observer.disconnect();
   }, [rfInstance]);
 
-  const selectedFlowNodes = flowNodes.filter(n => n.selected);
+  const isBatchBusy = isExtractingPattern;
   const canUndoStructure = pastStructureSnapshots.length > 0;
   const canRedoStructure = futureStructureSnapshots.length > 0;
   const hasNaturalResetTarget = !!project && ((mainlines[project.project_id] || []).join('|') !== ((naturalMainlines[project.project_id] || []).join('|')));
 
-  const handleBatchToggle = () => {
+  const handleApplySelection = (action: 'include' | 'exclude') => {
     if (!project || !context) return;
-
-    const selectedIds = selectedFlowNodes.map((n) => n.id);
-    const includedCount = selectedFlowNodes.reduce((count, n) => {
-      const isActive = activeNodeIds.has(n.id);
-      const isExcluded = context.excluded_nodes.includes(n.id);
-      const isIncluded = context.included_nodes.includes(n.id);
-      const isEffectivelyIncluded = (isActive && !isExcluded) || (!isActive && isIncluded);
-      return count + (isEffectivelyIncluded ? 1 : 0);
-    }, 0);
-
-    // Majority rule: if majority is included, set all to exclude; otherwise set all to include.
-    const action = includedCount > selectedFlowNodes.length / 2 ? 'exclude' : 'include';
+    const selectedIds = [...selectedNodeIds];
+    if (selectedIds.length === 0) return;
     batchToggleInclusion(project.project_id, selectedIds, action);
-
-    setFlowNodes(nds => nds.map(n => ({ ...n, selected: false })));
+    finishSelectionMode();
   };
+
+  const handleInvertSelection = () => {
+    if (!project || selectedNodeIds.length === 0) return;
+    selectedNodeIds.forEach((nodeId) => cycleNodeInclusionState(project.project_id, nodeId));
+    finishSelectionMode();
+  };
+
+  const handleExtractPatternFromSelection = async () => {
+    if (!project || selectedNodeIds.length === 0 || isBatchBusy) return;
+    setIsExtractingPattern(true);
+    try {
+      const selectedNodes = selectedNodeIds
+        .map((nodeId) => nodes[nodeId])
+        .filter((n): n is Node => !!n)
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      if (selectedNodes.length === 0) return;
+      const extracted = await extractPatternByType(selectedNodes, pendingPatternType);
+      createPattern({
+        type: pendingPatternType,
+        name: extracted.name,
+        requires_human_review: extracted.requires_human_review,
+        instruction: extracted.instruction,
+        example: extracted.example,
+        fromNodeId: selectedNodes[0].node_id,
+        toNodeId: selectedNodes[selectedNodes.length - 1].node_id,
+        sourceProjectId: project.project_id,
+      });
+      finishSelectionMode({ preserveNotice: true });
+      emitSelectionNotice({
+        id: `pattern-extracted-${Date.now()}`,
+        tone: extracted.requires_human_review ? 'warning' : 'success',
+        title: extracted.requires_human_review ? 'Pattern extracted for review' : 'Pattern extracted',
+        message: extracted.requires_human_review
+          ? 'The draft pattern is ready, but it still needs a quick human review before you enable it.'
+          : 'The current selection was turned into a reusable pattern. You can inspect it from the chat pattern panel.',
+        details: `Name: ${extracted.name}\nType: ${PATTERN_TYPE_LABEL[pendingPatternType]}\nRange: ${selectedNodes[0].node_id} -> ${selectedNodes[selectedNodes.length - 1].node_id}`,
+        defaultExpanded: extracted.requires_human_review,
+      });
+    } catch (error) {
+      console.error(error);
+      finishSelectionMode({ preserveNotice: true });
+      emitSelectionNotice({
+        id: `pattern-error-${Date.now()}`,
+        tone: 'error',
+        title: 'Pattern extraction failed',
+        message: 'The map could not turn this selection into a pattern draft.',
+        details: 'Try a smaller, more coherent selection, or switch the pattern type before extracting again.',
+        defaultExpanded: true,
+      });
+    } finally {
+      setIsExtractingPattern(false);
+    }
+  };
+
+  const handleToggleSelectionMode = useCallback(() => {
+    if (isSelectionMode) {
+      finishSelectionMode();
+      return;
+    }
+    clearSelectionState();
+    setContextMenu(null);
+    setIsSelectionMode(true);
+  }, [clearSelectionState, finishSelectionMode, isSelectionMode]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (!isSelectionMode) return;
+      event.preventDefault();
+      if (selectedNodeIds.length > 0) {
+        clearSelectionState();
+      } else {
+        finishSelectionMode();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [clearSelectionState, finishSelectionMode, isSelectionMode, selectedNodeIds.length]);
+
+  useEffect(() => {
+    if (!selectionNotice) return;
+    const timeout = window.setTimeout(() => {
+      setSelectionNotice((current) => (current?.id === selectionNotice.id ? null : current));
+    }, 3600);
+    return () => window.clearTimeout(timeout);
+  }, [selectionNotice]);
 
   const handleRearrangeAndCenter = useCallback(() => {
     if (!project || !rfInstance) return;
@@ -1068,7 +1287,9 @@ export default function ContextMap() {
           </div>
           <div className="text-xs text-zinc-500 flex items-center gap-1">
             <MousePointerSquareDashed size={14} />
-            <span className="hidden md:inline">Shift+Drag to box select</span>
+            <span className="hidden md:inline">
+              {isSelectionMode ? 'Selection active: click add, Shift+drag box' : 'Click toggles node context'}
+            </span>
           </div>
         </div>
       </div>
@@ -1077,11 +1298,13 @@ export default function ContextMap() {
         <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}
-          onNodesChange={onNodesChange}
+          onNodesChange={handleFlowNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           onPaneClick={onPaneClick}
           onInit={setRfInstance}
+          elementsSelectable={isSelectionMode}
+          nodesDraggable={!isSelectionMode}
           selectionMode={SelectionMode.Partial}
           selectionOnDrag={false}
           panOnScroll={false}
@@ -1093,10 +1316,25 @@ export default function ContextMap() {
         </ReactFlow>
 
         {/* Floating View Controls */}
-        <div className="absolute top-4 right-4 bg-white/95 backdrop-blur border border-zinc-200 rounded-xl shadow-md p-2 flex items-center gap-2 z-20">
+        <div className="absolute top-4 right-4 max-w-[calc(100%-2rem)] bg-white/92 backdrop-blur-xl border border-zinc-200 rounded-[1.35rem] shadow-[0_18px_45px_rgba(15,23,42,0.14)] p-2 flex items-center gap-2 z-20">
+          <button
+            onClick={handleToggleSelectionMode}
+            className={clsx(
+              "text-xs px-3 py-2 rounded-xl border transition-all flex items-center gap-1.5",
+              isSelectionMode
+                ? `${SELECTION_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(39,39,42,0.18)]`
+                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+            )}
+            title={isSelectionMode ? 'Finish node selection mode' : 'Start selecting nodes for batch actions'}
+          >
+            {isSelectionMode ? <X size={13} className="!text-white" /> : <Sparkles size={13} className="text-inherit" />}
+            <span className={clsx(isSelectionMode && "!text-white")}>
+              {isSelectionMode ? 'Finish' : 'Selection'}
+            </span>
+          </button>
           <button
             onClick={handleRearrangeAndCenter}
-            className="text-xs text-zinc-600 px-2 py-1 rounded-md border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center gap-1"
+            className="text-xs text-zinc-600 px-3 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center gap-1"
             title="Rearrange and center mainline"
           >
             <WandSparkles size={13} />
@@ -1104,7 +1342,7 @@ export default function ContextMap() {
           </button>
           <button
             onClick={handleFitAll}
-            className="text-xs text-zinc-600 px-2 py-1 rounded-md border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center gap-1"
+            className="text-xs text-zinc-600 px-3 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center gap-1"
             title="Fit entire graph"
           >
             <Maximize2 size={13} />
@@ -1124,24 +1362,180 @@ export default function ContextMap() {
           )}
         </div>
 
-        {/* Floating Batch Action Bar */}
-        {selectedFlowNodes.length > 0 && (
+        {selectionNotice && (
           <div
-            className="absolute top-4 left-1/2 -translate-x-1/2 bg-zinc-900 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-4 z-20"
+            className={clsx(
+              "absolute top-20 right-4 z-20",
+              selectionNotice.tone === 'success'
+                ? "w-[min(15rem,calc(100%-2rem))]"
+                : "w-[min(18rem,calc(100%-2rem))]"
+            )}
+          >
+            <div
+              className={clsx(
+                "rounded-[1.2rem] border bg-white/94 backdrop-blur-xl",
+                selectionNotice.tone === 'success'
+                  ? "p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.1)]"
+                  : "p-3 shadow-[0_16px_40px_rgba(15,23,42,0.14)]",
+                selectionNotice.tone === 'info' && "border-zinc-200 text-slate-900",
+                selectionNotice.tone === 'success' && "border-emerald-200 text-emerald-950",
+                selectionNotice.tone === 'warning' && "border-amber-200 text-amber-950",
+                selectionNotice.tone === 'error' && "border-rose-200 text-rose-950"
+              )}
+              role="status"
+              aria-live="polite"
+            >
+              <div className={clsx("flex items-start", selectionNotice.tone === 'success' ? "gap-2.5" : "gap-3")}>
+                <div
+                  className={clsx(
+                    "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border",
+                    selectionNotice.tone === 'info' && "border-zinc-200 bg-zinc-100 text-zinc-700",
+                    selectionNotice.tone === 'success' && "border-emerald-200 bg-emerald-50 text-emerald-700",
+                    selectionNotice.tone === 'warning' && "border-amber-200 bg-amber-50 text-amber-700",
+                    selectionNotice.tone === 'error' && "border-rose-200 bg-rose-50 text-rose-700"
+                  )}
+                >
+                  {selectionNotice.tone === 'info' && <Info size={16} />}
+                  {selectionNotice.tone === 'success' && <CheckCircle2 size={15} />}
+                  {selectionNotice.tone === 'warning' && <TriangleAlert size={16} />}
+                  {selectionNotice.tone === 'error' && <CircleAlert size={16} />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      {selectionNotice.tone !== 'success' && (
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Context Map</p>
+                      )}
+                      <h3 className={clsx(selectionNotice.tone === 'success' ? "text-[13px] font-semibold" : "mt-1 text-sm font-semibold")}>
+                        {selectionNotice.title}
+                      </h3>
+                    </div>
+                    <button
+                      onClick={() => emitSelectionNotice(null)}
+                      className="rounded-full p-1 text-slate-400 transition-colors hover:bg-black/5 hover:text-slate-700"
+                      aria-label="Dismiss notice"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p className={clsx(selectionNotice.tone === 'success' ? "mt-1 text-[12px] leading-5 text-slate-600" : "mt-2 text-sm leading-5")}>
+                    {selectionNotice.message}
+                  </p>
+                  {selectionNotice.details && (
+                    <button
+                      onClick={() => setIsSelectionNoticeExpanded((prev) => !prev)}
+                      className={clsx(
+                        "text-xs font-medium text-slate-500 transition-colors hover:text-slate-900",
+                        selectionNotice.tone === 'success' ? "mt-1.5" : "mt-2"
+                      )}
+                    >
+                      {isSelectionNoticeExpanded ? 'Hide details' : 'View details'}
+                    </button>
+                  )}
+                  {isSelectionNoticeExpanded && selectionNotice.details && (
+                    <div className="mt-2 rounded-2xl border border-black/5 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100 whitespace-pre-line">
+                      {selectionNotice.details}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Floating Batch Action Bar */}
+        {isSelectionMode && selectedNodeIds.length > 0 && (
+          <div
+            className="absolute top-20 right-4 z-20 max-w-[calc(100%-2rem)] rounded-[1.1rem] border border-zinc-200 bg-white/96 p-2 text-slate-900 shadow-[0_10px_26px_rgba(15,23,42,0.1)] backdrop-blur-xl"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            <span className="text-sm font-medium">{selectedFlowNodes.length} selected</span>
-            <div className="h-4 w-px bg-zinc-700" />
-            <button 
-              onClick={(e) => {
-                e.stopPropagation();
-                handleBatchToggle();
-              }}
-              className="text-sm hover:text-indigo-400 transition-colors flex items-center gap-1"
-            >
-              Toggle Context
-            </button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className={clsx("mr-1 flex items-center gap-1.5 rounded-full px-2.5 py-1.5", SELECTION_ACTIVE_SURFACE)}>
+                <span className="text-xs font-semibold leading-none">
+                  {selectedNodeIds.length}
+                </span>
+                <span className="text-[11px] font-medium leading-none">
+                  selected
+                </span>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleApplySelection('include');
+                }}
+                disabled={isBatchBusy || selectedNodeIds.length === 0}
+                className={clsx(
+                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  isBatchBusy || selectedNodeIds.length === 0
+                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                )}
+              >
+                + Include
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleApplySelection('exclude');
+                }}
+                disabled={isBatchBusy || selectedNodeIds.length === 0}
+                className={clsx(
+                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  isBatchBusy || selectedNodeIds.length === 0
+                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                )}
+              >
+                - Exclude
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleInvertSelection();
+                }}
+                disabled={isBatchBusy || selectedNodeIds.length === 0}
+                className={clsx(
+                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  isBatchBusy || selectedNodeIds.length === 0
+                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                )}
+              >
+                <ArrowRightLeft size={14} />
+                Invert
+              </button>
+              <div className="mx-1 h-6 w-px bg-slate-200" />
+              <select
+                value={pendingPatternType}
+                onChange={(e) => setPendingPatternType(e.target.value as PatternType)}
+                disabled={isBatchBusy}
+                aria-label="Pattern type"
+                className="h-8 rounded-full border border-slate-300 bg-white px-2.5 text-[11px] text-slate-700 outline-none"
+              >
+                {PATTERN_TYPE_ORDER.map((type) => (
+                  <option key={type} value={type}>
+                    {PATTERN_TYPE_LABEL[type]}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleExtractPatternFromSelection();
+                }}
+                disabled={isBatchBusy || selectedNodeIds.length === 0}
+                className={clsx(
+                  "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  isBatchBusy || selectedNodeIds.length === 0
+                    ? "border-slate-200 bg-slate-200 text-slate-500 cursor-not-allowed"
+                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                )}
+              >
+                <Sparkles size={14} className="text-inherit" />
+                <span>{isBatchBusy ? 'Extracting...' : 'Extract'}</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -1223,7 +1617,12 @@ export default function ContextMap() {
                   setMainlineEndpoints(project.project_id, selectedStartId, contextMenu.nodeId);
                   setSelectedStartId(null);
                 } else {
-                  alert('Please select a Mainline Start node first.');
+                  emitSelectionNotice({
+                    id: `mainline-start-required-${Date.now()}`,
+                    tone: 'info',
+                    title: 'Choose a start node first',
+                    message: 'Set a Mainline Start node before choosing the Mainline End node.',
+                  });
                 }
                 setContextMenu(null);
               }}
@@ -1232,6 +1631,7 @@ export default function ContextMap() {
             </button>
           </div>
         )}
+
       </div>
 
       {/* Legend */}
