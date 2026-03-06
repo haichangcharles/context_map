@@ -14,7 +14,8 @@
     "test:accept-branch": "tsx scripts/test-accept-suggested-branch.ts",
     "test:nested-branch": "tsx scripts/test-nested-branch.ts",
     "test:stream-truncation": "tsx scripts/test-stream-truncation.ts",
-    "test:pattern-sync": "tsx scripts/test-pattern-sync.ts"
+    "test:pattern-sync": "tsx scripts/test-pattern-sync.ts",
+    "test:chat-history-sync": "tsx scripts/test-chat-history-sync.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

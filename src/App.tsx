@@ -11,9 +11,9 @@ import { useState, useEffect } from 'react';
 import { PanelRightClose, PanelRightOpen, Maximize2, Minimize2 } from 'lucide-react';
 import clsx from 'clsx';
 import { getActiveUserId, setActiveUserId } from './utils/branchFeedbackDataset';
-import { startChatHistorySync } from './services/chatHistory';
+import { pullRemoteChatHistory, reconstructChatStateFromRecords, startChatHistorySync } from './services/chatHistory';
 import { pullRemotePatterns, startPatternSync } from './services/patternSync';
-import { mergePatternsFromRemoteRecords, rehydrateStoreForActiveUser } from './store';
+import { mergePatternsFromRemoteRecords, mergeRecoveredChatStateIntoStore, rehydrateStoreForActiveUser } from './store';
 
 export default function App() {
   const isManageRoute = typeof window !== 'undefined' && window.location.pathname === '/manage';
@@ -32,6 +32,12 @@ export default function App() {
   const syncPatternsFromRemote = async () => {
     const records = await pullRemotePatterns();
     mergePatternsFromRemoteRecords(records);
+  };
+
+  const syncChatHistoryFromRemote = async () => {
+    const records = await pullRemoteChatHistory();
+    if (records.length === 0) return;
+    mergeRecoveredChatStateIntoStore(reconstructChatStateFromRecords(records));
   };
 
   useEffect(() => {
@@ -85,6 +91,7 @@ export default function App() {
     if (!normalized) return;
     setActiveUserId(normalized);
     await rehydrateStoreForActiveUser();
+    await syncChatHistoryFromRemote();
     await syncPatternsFromRemote();
     setActiveUserIdState(normalized);
   };
@@ -92,14 +99,17 @@ export default function App() {
   useEffect(() => {
     if (!activeUserId) return;
 
+    void syncChatHistoryFromRemote();
     void syncPatternsFromRemote();
 
     const onOnline = () => {
+      void syncChatHistoryFromRemote();
       void syncPatternsFromRemote();
     };
 
     const onVisible = () => {
       if (typeof document !== 'undefined' && !document.hidden) {
+        void syncChatHistoryFromRemote();
         void syncPatternsFromRemote();
       }
     };
@@ -110,6 +120,7 @@ export default function App() {
     }
 
     const timer = window.setInterval(() => {
+      void syncChatHistoryFromRemote();
       void syncPatternsFromRemote();
     }, 15000);
 

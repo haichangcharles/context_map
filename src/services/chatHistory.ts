@@ -1,7 +1,7 @@
-import { Node } from '../types';
+import { Branch, ContextView, Node, Pattern, Project } from '../types';
 import { getActiveUserId } from '../utils/branchFeedbackDataset';
 
-type ChatHistoryRecord = {
+export type ChatHistoryRecord = {
   message_id: string;
   user_id: string;
   project_id: string;
@@ -14,12 +14,30 @@ type ChatHistoryRecord = {
 };
 
 type ChatHistoryByUser = Record<string, ChatHistoryRecord[]>;
-type ChatSyncState = {
+export type ChatSyncState = {
   last_attempt_at: string | null;
   last_success_at: string | null;
   last_error_at: string | null;
   last_error_message: string | null;
   pending_count: number;
+  last_pull_attempt_at: string | null;
+  last_pull_success_at: string | null;
+  last_pull_error_at: string | null;
+  last_pull_error_message: string | null;
+};
+
+export type RecoveredChatState = {
+  projects: Record<string, Project>;
+  nodes: Record<string, Node>;
+  branches: Record<string, Branch>;
+  mainlines: Record<string, string[]>;
+  contexts: Record<string, ContextView>;
+  naturalMainlines: Record<string, string[]>;
+  naturalBranches: Record<string, Branch>;
+  patterns: Record<string, Pattern>;
+  pastStructureSnapshots: [];
+  futureStructureSnapshots: [];
+  activeProjectId: string | null;
 };
 
 const LOCAL_CHAT_HISTORY_KEY = 'context-map.chat-history.by-user.v1';
@@ -43,6 +61,10 @@ const readSyncState = (): ChatSyncState =>
     last_error_at: null,
     last_error_message: null,
     pending_count: readJson<ChatHistoryRecord[]>(LOCAL_PENDING_SYNC_KEY, []).length,
+    last_pull_attempt_at: null,
+    last_pull_success_at: null,
+    last_pull_error_at: null,
+    last_pull_error_message: null,
   });
 
 const writeSyncState = (patch: Partial<ChatSyncState>) => {
@@ -112,6 +134,197 @@ const getSupabaseConfig = () => {
     url: url.replace(/\/+$/, ''),
     anonKey,
   };
+};
+
+const sortRecordsChronologically = (records: ChatHistoryRecord[]) =>
+  [...records].sort((a, b) => {
+    const byTimestamp = new Date(a.message_timestamp).getTime() - new Date(b.message_timestamp).getTime();
+    if (byTimestamp !== 0) return byTimestamp;
+    return a.message_id.localeCompare(b.message_id);
+  });
+
+const buildRecoveredProjectTitle = (projectId: string) => `Recovered ${projectId.slice(0, 8)}`;
+
+export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): RecoveredChatState => {
+  const ordered = sortRecordsChronologically(records);
+  const nodes: Record<string, Node> = {};
+  const branches: Record<string, Branch> = {};
+  const mainlines: Record<string, string[]> = {};
+  const projects: Record<string, Project> = {};
+  const contexts: Record<string, ContextView> = {};
+  const naturalMainlines: Record<string, string[]> = {};
+  const naturalBranches: Record<string, Branch> = {};
+  const orderedByProject = new Map<string, ChatHistoryRecord[]>();
+
+  ordered.forEach((record) => {
+    if (!orderedByProject.has(record.project_id)) orderedByProject.set(record.project_id, []);
+    orderedByProject.get(record.project_id)!.push(record);
+    nodes[record.message_id] = {
+      node_id: record.message_id,
+      project_id: record.project_id,
+      parent_id: record.parent_id,
+      role: record.role,
+      content: record.content,
+      branch_id: record.branch_id,
+      timestamp: record.message_timestamp,
+      metadata: {
+        natural_origin_branch_id: record.branch_id,
+      },
+    };
+  });
+
+  for (const [projectId, projectRecords] of orderedByProject.entries()) {
+    const contextId = `restored-context:${projectId}`;
+    const mainlineIds = projectRecords.filter((record) => record.branch_id === null).map((record) => record.message_id);
+    mainlines[projectId] = mainlineIds;
+    naturalMainlines[projectId] = [...mainlineIds];
+
+    const rootNodeId =
+      projectRecords.find((record) => record.parent_id === null)?.message_id ||
+      mainlineIds[0] ||
+      projectRecords[0]?.message_id ||
+      null;
+
+    projects[projectId] = {
+      project_id: projectId,
+      title: buildRecoveredProjectTitle(projectId),
+      root_node_id: rootNodeId,
+      mainline_id: `mainline_${projectId}`,
+      active_context_id: contextId,
+    };
+
+    contexts[contextId] = {
+      context_id: contextId,
+      project_id: projectId,
+      base_path: 'mainline',
+      included_nodes: [],
+      excluded_nodes: [],
+      enabled_patterns_by_type: {},
+    };
+
+    const branchIds = Array.from(
+      new Set(projectRecords.map((record) => record.branch_id).filter((value): value is string => !!value))
+    );
+
+    branchIds.forEach((branchId) => {
+      const branchRecords = projectRecords.filter((record) => record.branch_id === branchId);
+      const firstRecord = branchRecords[0];
+      if (!firstRecord) return;
+
+      const parentBranchId =
+        firstRecord.parent_id && nodes[firstRecord.parent_id]
+          ? nodes[firstRecord.parent_id].branch_id
+          : null;
+
+      const branch: Branch = {
+        branch_id: branchId,
+        project_id: projectId,
+        anchor_node_id: firstRecord.parent_id || rootNodeId || firstRecord.message_id,
+        parent_branch_id: parentBranchId,
+        status: 'active',
+      };
+
+      branches[branchId] = branch;
+      naturalBranches[branchId] = branch;
+    });
+  }
+
+  return {
+    projects,
+    nodes,
+    branches,
+    mainlines,
+    contexts,
+    naturalMainlines,
+    naturalBranches,
+    patterns: {},
+    pastStructureSnapshots: [],
+    futureStructureSnapshots: [],
+    activeProjectId: Object.keys(projects)[0] || null,
+  };
+};
+
+export const mergeRecoveredChatState = (
+  currentState: RecoveredChatState,
+  recoveredState: RecoveredChatState
+): RecoveredChatState => {
+  const mergedProjects = { ...recoveredState.projects, ...currentState.projects };
+  const mergedNodes = { ...recoveredState.nodes, ...currentState.nodes };
+  const mergedBranches = { ...recoveredState.branches, ...currentState.branches };
+  const mergedNaturalBranches = { ...recoveredState.naturalBranches, ...currentState.naturalBranches };
+  const mergedContexts = { ...recoveredState.contexts, ...currentState.contexts };
+
+  const mergedMainlines = { ...recoveredState.mainlines };
+  Object.entries(currentState.mainlines).forEach(([projectId, ids]) => {
+    mergedMainlines[projectId] = ids.length > 0 ? ids : (mergedMainlines[projectId] || []);
+  });
+
+  const mergedNaturalMainlines = { ...recoveredState.naturalMainlines };
+  Object.entries(currentState.naturalMainlines).forEach(([projectId, ids]) => {
+    mergedNaturalMainlines[projectId] = ids.length > 0 ? ids : (mergedNaturalMainlines[projectId] || []);
+  });
+
+  return {
+    projects: mergedProjects,
+    nodes: mergedNodes,
+    branches: mergedBranches,
+    mainlines: mergedMainlines,
+    contexts: mergedContexts,
+    naturalMainlines: mergedNaturalMainlines,
+    naturalBranches: mergedNaturalBranches,
+    patterns: currentState.patterns,
+    pastStructureSnapshots: [],
+    futureStructureSnapshots: [],
+    activeProjectId: currentState.activeProjectId || recoveredState.activeProjectId,
+  };
+};
+
+export const pullRemoteChatHistory = async (): Promise<ChatHistoryRecord[]> => {
+  const config = getSupabaseConfig();
+  const userId = normalizeUserId();
+  if (!config || !userId || !hasWindow()) return [];
+
+  writeSyncState({
+    last_pull_attempt_at: new Date().toISOString(),
+  });
+
+  try {
+    const endpoint = new URL(`${config.url}/rest/v1/${SUPABASE_TABLE}`);
+    endpoint.searchParams.set('select', '*');
+    endpoint.searchParams.set('user_id', `eq.${userId}`);
+    endpoint.searchParams.set('order', 'message_timestamp.asc');
+
+    const response = await fetch(endpoint.toString(), {
+      method: 'GET',
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${config.anonKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      writeSyncState({
+        last_pull_error_at: new Date().toISOString(),
+        last_pull_error_message: `HTTP ${response.status}: ${body || 'unknown error'}`,
+      });
+      return [];
+    }
+
+    const records = (await response.json().catch(() => [])) as ChatHistoryRecord[];
+    writeSyncState({
+      last_pull_success_at: new Date().toISOString(),
+      last_pull_error_message: null,
+    });
+    return Array.isArray(records) ? records : [];
+  } catch {
+    writeSyncState({
+      last_pull_error_at: new Date().toISOString(),
+      last_pull_error_message: 'Network request failed',
+    });
+    return [];
+  }
 };
 
 const flushPendingInternal = async () => {

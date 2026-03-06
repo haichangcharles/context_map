@@ -6,9 +6,9 @@
 - **Status:** complete
 - **Started:** 2026-03-06 10:00:00 EST
 - Actions taken:
-  - Bootstrapped superpowers and loaded `brainstorming`, `test-driven-development`, `planning-with-files`, and `terminal-title`.
-  - Inspected `src/store.ts`, `src/services/chatHistory.ts`, `src/components/ConversationStream.tsx`, and `src/components/ManagePanel.tsx`.
-  - Confirmed that patterns are local-only today while chat history already uses local queue + Supabase upsert.
+  - Bootstrapped superpowers and loaded `test-driven-development`, `planning-with-files`, and `terminal-title` for the chat-history restoration task.
+  - Inspected `src/services/chatHistory.ts` and `src/store.ts`.
+  - Confirmed `chat_history` currently supports push-only sync and does not store enough data for exact full-state reconstruction.
 - Files created/modified:
   - `task_plan.md`
   - `findings.md`
@@ -17,9 +17,9 @@
 ### Phase 2: Planning & Structure
 - **Status:** complete
 - Actions taken:
-  - Chose to mirror the existing chat sync architecture for patterns.
-  - Chose snapshot upserts with soft-delete to propagate pattern removals to Supabase.
-  - Identified store CRUD actions as the integration points.
+  - Chose best-effort reconstruction of projects, nodes, mainlines, natural mainlines, branches, and default contexts from remote messages.
+  - Chose merge semantics that preserve existing local nodes and fill gaps from remote records.
+  - Identified exact restoration gaps imposed by the current schema.
 - Files created/modified:
   - `task_plan.md`
   - `findings.md`
@@ -28,24 +28,24 @@
 ### Phase 3: Implementation
 - **Status:** complete
 - Actions taken:
-  - Added `src/services/patternSync.ts` with local history, pending queue, Supabase flush, retry triggers, and exported status readers.
-  - Wired `createPattern`, `updatePattern`, `approvePattern`, and `deletePattern` in `src/store.ts` to enqueue sync snapshots.
-  - Started pattern sync in `src/App.tsx` and surfaced sync status in `src/components/ManagePanel.tsx`.
-  - Added `scripts/test-pattern-sync.ts` and `npm run test:pattern-sync`.
+  - Added chat-history reconstruction helpers and remote pull support in `src/services/chatHistory.ts`.
+  - Added a store merge helper that applies recovered chat state without overwriting richer local node/project data.
+  - Wired remote chat-history pull into user confirmation and periodic refresh in `src/App.tsx`.
+  - Extended the manage panel with chat pull status and added `scripts/test-chat-history-sync.ts`.
 - Files created/modified:
-  - `src/services/patternSync.ts`
+  - `src/services/chatHistory.ts`
   - `src/store.ts`
   - `src/App.tsx`
   - `src/components/ManagePanel.tsx`
-  - `scripts/test-pattern-sync.ts`
+  - `scripts/test-chat-history-sync.ts`
   - `package.json`
 
 ### Phase 4: Testing & Verification
 - **Status:** complete
 - Actions taken:
-  - Ran `npm run test:pattern-sync` once to confirm RED failure (`ERR_MODULE_NOT_FOUND` for missing `patternSync` service).
-  - Implemented the service and reran `npm run test:pattern-sync` to GREEN.
-  - Added a second RED step for remote pull/merge exports, then implemented pull + merge behavior and reran to GREEN.
+  - Ran `npm run test:chat-history-sync` once to confirm RED failure (missing reconstruction export).
+  - Implemented the reconstruction/pull flow and reran `npm run test:chat-history-sync` to GREEN.
+  - Re-ran `npm run test:pattern-sync` to confirm no regression in the existing pattern sync path.
   - Ran `npm run lint`.
 - Files created/modified:
   - `progress.md`
@@ -53,23 +53,21 @@
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
-| Pattern sync RED | `npm run test:pattern-sync` before implementation | Fails because `src/services/patternSync` does not exist yet | Failed with `ERR_MODULE_NOT_FOUND` as expected | ✓ |
-| Pattern sync GREEN | `npm run test:pattern-sync` after implementation | Local queue + Supabase flush assertions pass | Passed | ✓ |
-| Pattern pull/merge RED | `npm run test:pattern-sync` before remote merge implementation | Fails because remote merge export does not exist yet | Failed with missing export as expected | ✓ |
-| Pattern pull/merge GREEN | `npm run test:pattern-sync` after remote merge implementation | Remote fetch and merge/deletion assertions pass | Passed | ✓ |
+| Chat history pull RED | `npm run test:chat-history-sync` before implementation | Fails because reconstruction exports do not exist yet | Failed with missing export as expected | ✓ |
+| Chat history pull GREEN | `npm run test:chat-history-sync` after implementation | Reconstructed projects/nodes/mainlines/branches and merge assertions pass | Passed | ✓ |
+| Pattern sync regression | `npm run test:pattern-sync` | Existing pattern sync behavior remains green | Passed | ✓ |
 | Type check | `npm run lint` | No TS errors | Passed | ✓ |
 
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
-| 2026-03-06 10:08:00 EST | `npm run test:pattern-sync` failed with `ERR_MODULE_NOT_FOUND` for `src/services/patternSync` | 1 | Expected RED step in TDD; implemented `src/services/patternSync.ts` and reran |
-| 2026-03-06 10:18:00 EST | `npm run test:pattern-sync` failed with missing `mergeRemotePatternsIntoPatterns` export | 1 | Expected RED step for bidirectional sync; implemented remote pull + merge helpers and reran |
+| 2026-03-06 10:40:00 EST | `npm run test:chat-history-sync` failed with missing `mergeRecoveredChatState` export | 1 | Expected RED step in TDD; implemented reconstruction/pull helpers and reran |
 
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
 | Where am I? | Phase 5 |
 | Where am I going? | Delivery is complete for this session |
-| What's the goal? | Add remote Supabase durability for patterns while preserving existing local-first behavior |
-| What have I learned? | Pattern CRUD can be mirrored to Supabase cleanly from store actions without changing local hydration |
-| What have I done? | Added the sync service, wired store CRUD, added scripted tests, and verified with typecheck |
+| What's the goal? | Add remote chat-history readback that can recover a usable local conversation graph |
+| What have I learned? | The current remote schema supports best-effort graph reconstruction but not exact replay of later structure mutations |
+| What have I done? | Added reconstruction + pull flow, wired it into app startup/switching, and verified it with tests/typecheck |

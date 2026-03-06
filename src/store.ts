@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, Node, Branch, ContextView, Pattern, PatternType, Role } from './types';
+import { mergeRecoveredChatState, type RecoveredChatState } from './services/chatHistory';
 import { logPatternDelete, logPatternUpsert, mergeRemotePatternsIntoPatterns, type PatternSyncRecord } from './services/patternSync';
 
 type StructureSnapshot = {
@@ -1542,6 +1543,38 @@ export const mergePatternsFromRemoteRecords = (remoteRecords: PatternSyncRecord[
     return {
       patterns: nextPatterns,
       contexts: nextContexts,
+    };
+  });
+};
+
+export const mergeRecoveredChatStateIntoStore = (recoveredState: RecoveredChatState) => {
+  useAppStore.setState((state) => {
+    const merged = mergeRecoveredChatState(
+      {
+        projects: state.projects,
+        nodes: state.nodes,
+        branches: state.branches,
+        mainlines: state.mainlines,
+        contexts: state.contexts,
+        naturalMainlines: state.naturalMainlines,
+        naturalBranches: state.naturalBranches,
+        patterns: state.patterns,
+        pastStructureSnapshots: [],
+        futureStructureSnapshots: [],
+        activeProjectId: state.activeProjectId,
+      },
+      recoveredState
+    );
+
+    return {
+      projects: merged.projects,
+      nodes: merged.nodes,
+      branches: merged.branches,
+      mainlines: merged.mainlines,
+      contexts: merged.contexts,
+      naturalMainlines: merged.naturalMainlines,
+      naturalBranches: merged.naturalBranches,
+      activeProjectId: merged.activeProjectId,
     };
   });
 };

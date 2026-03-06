@@ -234,6 +234,10 @@ export default function ManagePanel() {
             <div>last_success_at: {chatSync.last_success_at || 'N/A'}</div>
             <div>last_error_at: {chatSync.last_error_at || 'N/A'}</div>
             <div>last_error_message: {chatSync.last_error_message || 'None'}</div>
+            <div>last_pull_attempt_at: {chatSync.last_pull_attempt_at || 'N/A'}</div>
+            <div>last_pull_success_at: {chatSync.last_pull_success_at || 'N/A'}</div>
+            <div>last_pull_error_at: {chatSync.last_pull_error_at || 'N/A'}</div>
+            <div>last_pull_error_message: {chatSync.last_pull_error_message || 'None'}</div>
           </div>
         </div>
 
