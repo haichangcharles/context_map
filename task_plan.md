@@ -78,3 +78,21 @@ Ensure recovered projects use their stored title instead of fallback labels like
 - Recovery now prefers the latest non-empty stored `project_title` per project and falls back only for legacy rows.
 - Sync now attaches `project.title` when logging new nodes.
 - Upsert now auto-retries without `project_title` if the Supabase table has not been migrated yet.
+
+## Follow-up: Delete Selected Nodes From Map
+
+### Goal
+Replace the current `Fit` affordance with a high-risk delete workflow that reuses selection mode, previews the structural outcome, requires explicit confirmation, preserves descendants when deleting middle segments, and supports undo of the last delete.
+
+### Phases
+- [x] Trace current selection UI and structural history hooks
+- [x] Add failing scripted tests for delete semantics
+- [x] Implement store-level delete mutation and preview helper
+- [x] Replace fit UI with delete mode, preview, and confirmation
+- [x] Verify scripted tests and typecheck
+
+### Constraints
+- Deleting a tail segment or an entire thread should remove it normally.
+- Deleting a middle segment should splice the remaining graph back together.
+- If the deleted range includes a branch anchor or other splice point, insert a placeholder node so surviving descendants stay connected without rewriting meaning.
+- The action must be confirm-only and reversible through the existing structure undo stack.

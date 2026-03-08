@@ -42,5 +42,12 @@
 body.resizing-context-map,
 body.resizing-context-map * {
   user-select: none;
+  -webkit-user-select: none;
   cursor: col-resize !important;
+}
+
+body.selecting-context-map,
+body.selecting-context-map * {
+  user-select: none;
+  -webkit-user-select: none;
 }

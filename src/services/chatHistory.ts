@@ -38,6 +38,7 @@ export type RecoveredChatState = {
   patterns: Record<string, Pattern>;
   pastStructureSnapshots: [];
   futureStructureSnapshots: [];
+  deletedNodeIds: string[];
   activeProjectId: string | null;
 };
 
@@ -47,6 +48,8 @@ const LOCAL_SYNC_STATUS_KEY = 'context-map.chat-history.sync-status.v1';
 const SUPABASE_TABLE = 'chat_history';
 const MAX_LOCAL_MESSAGES_PER_USER = 5000;
 const FALLBACK_LOCAL_USER_ID = 'local-anonymous';
+const DELETE_TOMBSTONE_MESSAGE_PREFIX = 'context-map-delete:';
+const DELETE_TOMBSTONE_CONTENT_PREFIX = '[context-map-delete] ';
 
 let flushPromise: Promise<void> | null = null;
 let supportsRemoteProjectTitle: boolean | null = null;
@@ -129,8 +132,9 @@ const upsertPending = (record: ChatHistoryRecord) => {
 };
 
 const getSupabaseConfig = () => {
-  const url = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-  const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  const url = (env?.VITE_SUPABASE_URL || '').trim();
+  const anonKey = (env?.VITE_SUPABASE_ANON_KEY || '').trim();
   if (!url || !anonKey) return null;
   return {
     url: url.replace(/\/+$/, ''),
@@ -147,6 +151,31 @@ const sortRecordsChronologically = (records: ChatHistoryRecord[]) =>
 
 const buildRecoveredProjectTitle = (projectId: string) => `Recovered ${projectId.slice(0, 8)}`;
 
+const parseDeletedNodeIdFromRecord = (record: ChatHistoryRecord): string | null => {
+  if (!record.message_id.startsWith(DELETE_TOMBSTONE_MESSAGE_PREFIX)) return null;
+  const deletedNodeId = record.message_id.slice(DELETE_TOMBSTONE_MESSAGE_PREFIX.length).trim();
+  return deletedNodeId || null;
+};
+
+export const buildDeleteTombstoneRecord = (
+  node: Node,
+  options?: { projectTitle?: string | null }
+): ChatHistoryRecord => {
+  const timestamp = new Date().toISOString();
+  return {
+    message_id: `${DELETE_TOMBSTONE_MESSAGE_PREFIX}${node.node_id}`,
+    user_id: normalizeUserId() || FALLBACK_LOCAL_USER_ID,
+    project_id: node.project_id,
+    project_title: options?.projectTitle?.trim() || null,
+    parent_id: null,
+    branch_id: null,
+    role: 'system',
+    content: `${DELETE_TOMBSTONE_CONTENT_PREFIX}${node.node_id}`,
+    message_timestamp: timestamp,
+    captured_at: timestamp,
+  };
+};
+
 const resolveRecoveredProjectTitle = (projectId: string, projectRecords: ChatHistoryRecord[]) => {
   for (let index = projectRecords.length - 1; index >= 0; index -= 1) {
     const candidate = projectRecords[index]?.project_title?.trim();
@@ -157,6 +186,16 @@ const resolveRecoveredProjectTitle = (projectId: string, projectRecords: ChatHis
 
 export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): RecoveredChatState => {
   const ordered = sortRecordsChronologically(records);
+  const deletedNodeIds = Array.from(new Set(
+    ordered
+      .map((record) => parseDeletedNodeIdFromRecord(record))
+      .filter((nodeId): nodeId is string => !!nodeId)
+  ));
+  const deletedNodeIdSet = new Set(deletedNodeIds);
+  const orderedMessages = ordered.filter((record) => (
+    !parseDeletedNodeIdFromRecord(record) &&
+    !deletedNodeIdSet.has(record.message_id)
+  ));
   const nodes: Record<string, Node> = {};
   const branches: Record<string, Branch> = {};
   const mainlines: Record<string, string[]> = {};
@@ -166,7 +205,7 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
   const naturalBranches: Record<string, Branch> = {};
   const orderedByProject = new Map<string, ChatHistoryRecord[]>();
 
-  ordered.forEach((record) => {
+  orderedMessages.forEach((record) => {
     if (!orderedByProject.has(record.project_id)) orderedByProject.set(record.project_id, []);
     orderedByProject.get(record.project_id)!.push(record);
     nodes[record.message_id] = {
@@ -220,6 +259,10 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
       const branchRecords = projectRecords.filter((record) => record.branch_id === branchId);
       const firstRecord = branchRecords[0];
       if (!firstRecord) return;
+      const anchorNodeId =
+        (firstRecord.parent_id && nodes[firstRecord.parent_id] ? firstRecord.parent_id : null) ||
+        rootNodeId ||
+        firstRecord.message_id;
 
       const parentBranchId =
         firstRecord.parent_id && nodes[firstRecord.parent_id]
@@ -229,7 +272,7 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
       const branch: Branch = {
         branch_id: branchId,
         project_id: projectId,
-        anchor_node_id: firstRecord.parent_id || rootNodeId || firstRecord.message_id,
+        anchor_node_id: anchorNodeId,
         parent_branch_id: parentBranchId,
         status: 'active',
       };
@@ -250,6 +293,7 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
     patterns: {},
     pastStructureSnapshots: [],
     futureStructureSnapshots: [],
+    deletedNodeIds,
     activeProjectId: Object.keys(projects)[0] || null,
   };
 };
@@ -273,6 +317,10 @@ export const mergeRecoveredChatState = (
   Object.entries(currentState.naturalMainlines).forEach(([projectId, ids]) => {
     mergedNaturalMainlines[projectId] = ids.length > 0 ? ids : (mergedNaturalMainlines[projectId] || []);
   });
+  const mergedDeletedNodeIds = Array.from(new Set([
+    ...recoveredState.deletedNodeIds,
+    ...currentState.deletedNodeIds,
+  ]));
 
   return {
     projects: mergedProjects,
@@ -285,6 +333,7 @@ export const mergeRecoveredChatState = (
     patterns: currentState.patterns,
     pastStructureSnapshots: [],
     futureStructureSnapshots: [],
+    deletedNodeIds: mergedDeletedNodeIds,
     activeProjectId: currentState.activeProjectId || recoveredState.activeProjectId,
   };
 };
@@ -492,5 +541,20 @@ export const logChatNode = async (node: Node, options?: { projectTitle?: string 
 
   appendLocalHistory(record);
   upsertPending(record);
+  void flushChatHistoryQueue();
+};
+
+export const logDeletedChatNodes = async (
+  nodes: Node[],
+  options?: { projectTitle?: string | null }
+) => {
+  if (nodes.length === 0) return;
+
+  nodes.forEach((node) => {
+    const record = buildDeleteTombstoneRecord(node, options);
+    appendLocalHistory(record);
+    upsertPending(record);
+  });
+
   void flushChatHistoryQueue();
 };

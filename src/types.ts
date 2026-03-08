@@ -2,6 +2,7 @@ export type Role = 'user' | 'assistant' | 'system';
 export type PatternType = 'reasoning' | 'task_sop' | 'context_case';
 export type PatternReviewStatus = 'pending' | 'approved';
 export type SelectionNoticeTone = 'info' | 'success' | 'warning' | 'error';
+export type SelectionIntent = 'batch' | 'delete';
 
 export interface SelectionNotice {
   id: string;
@@ -31,6 +32,7 @@ export interface Node {
   metadata: {
     is_anchor?: boolean;
     is_return_summary?: boolean;
+    is_delete_placeholder?: boolean;
     natural_origin_branch_id?: string | null;
   };
 }
@@ -70,4 +72,39 @@ export interface Pattern {
   created_at: string;
   updated_at: string;
   created_from_project_id?: string;
+}
+
+export interface DeletePreviewNode {
+  id: string;
+  label: string;
+  role: Role;
+  variant: 'normal' | 'selected' | 'placeholder';
+}
+
+export interface DeletePreviewEdge {
+  source: string;
+  target: string;
+}
+
+export interface DeleteSelectionPreview {
+  deletedNodeIds: string[];
+  placeholderNodeIds: string[];
+  requiresPlaceholder: boolean;
+  summary: string;
+  nodeVariants: Record<string, DeletePreviewNode['variant']>;
+  candidate: {
+    projects: Record<string, Project>;
+    nodes: Record<string, Node>;
+    branches: Record<string, Branch>;
+    mainlines: Record<string, string[]>;
+    contexts: Record<string, ContextView>;
+  };
+  before: {
+    nodes: DeletePreviewNode[];
+    edges: DeletePreviewEdge[];
+  };
+  after: {
+    nodes: DeletePreviewNode[];
+    edges: DeletePreviewEdge[];
+  };
 }

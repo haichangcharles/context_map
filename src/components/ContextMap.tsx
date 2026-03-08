@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useAppStore } from '../store';
 import { ReactFlow, Background, Controls, Node as FlowNode, Edge, Position, MarkerType, useNodesState, useEdgesState, Handle, ReactFlowInstance, SelectionMode, applyNodeChanges, type NodeChange } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Node, Branch, PatternType, SelectionNotice } from '../types';
+import { Node, Branch, PatternType, SelectionNotice, DeleteSelectionPreview } from '../types';
 import clsx from 'clsx';
-import { Layers, Eye, EyeOff, GitBranch, MousePointerSquareDashed, WandSparkles, Undo2, Redo2, RotateCcw, Maximize2, History, ArrowRightLeft, Sparkles, X, Info, CheckCircle2, TriangleAlert, CircleAlert } from 'lucide-react';
+import { Layers, Eye, EyeOff, GitBranch, MousePointerSquareDashed, WandSparkles, Undo2, Redo2, RotateCcw, History, ArrowRightLeft, Sparkles, X, Info, CheckCircle2, TriangleAlert, CircleAlert, Trash2 } from 'lucide-react';
 import dagre from 'dagre';
 import { buildQAPair, logBranchDebug, logContextMapDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { extractPatternByType } from '../services/gemini';
+import { CONTEXT_MAP_SELECTION_BODY_CLASS, syncBodyClassToggle } from '../utils/contextMapInteraction';
 
 // Custom Node Component
 const CustomNode = ({ data }: { data: any }) => {
@@ -16,6 +17,8 @@ const CustomNode = ({ data }: { data: any }) => {
   const isActive = data.isActive; // In the current base path
   const isSelectedStart = data.isSelectedStart;
   const isSelected = data.isSelected;
+  const isDeleteSelected = data.isDeleteSelected;
+  const isPlaceholder = data.isPlaceholder;
   
   return (
     <div 
@@ -24,10 +27,11 @@ const CustomNode = ({ data }: { data: any }) => {
         isActive ? "border-indigo-500 bg-indigo-50" : "border-zinc-200 bg-white",
         isExcluded && "opacity-50 border-dashed border-red-300 bg-red-50",
         isIncluded && !isActive && "border-emerald-500 bg-emerald-50",
-        isSelected && "border-sky-500 ring-2 ring-sky-300 ring-offset-1 shadow-[0_0_0_1px_rgba(14,165,233,0.25)]",
+        isSelected && !isDeleteSelected && "border-sky-500 ring-2 ring-sky-300 ring-offset-1 shadow-[0_0_0_1px_rgba(14,165,233,0.25)]",
+        isDeleteSelected && "border-rose-500 ring-2 ring-rose-300 ring-offset-1 shadow-[0_0_0_1px_rgba(244,63,94,0.22)]",
+        isPlaceholder && "border-amber-400 bg-amber-50 ring-2 ring-amber-200 ring-offset-1",
         isSelectedStart && "ring-4 ring-orange-400 ring-offset-2"
       )}
-      onClick={data.onPrimaryClick}
       onContextMenu={data.onContextMenu}
     >
       <Handle type="target" position={Position.Top} className="w-2 h-2 bg-zinc-400" />
@@ -49,6 +53,11 @@ const CustomNode = ({ data }: { data: any }) => {
         <div className="mt-1 flex items-center gap-1 text-[9px] text-indigo-600 bg-indigo-100 px-1 py-0.5 rounded-sm w-fit">
           <GitBranch size={10} />
           Branch
+        </div>
+      )}
+      {isPlaceholder && (
+        <div className="mt-1 flex items-center gap-1 text-[9px] text-amber-700 bg-amber-100 px-1 py-0.5 rounded-sm w-fit">
+          Placeholder
         </div>
       )}
       <Handle type="source" position={Position.Bottom} className="w-2 h-2 bg-zinc-400" />
@@ -74,6 +83,7 @@ const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
   context_case: 'Context Case',
 };
 const SELECTION_ACTIVE_SURFACE = 'bg-[#3a3a3c] border-[#3a3a3c] text-white';
+const DELETE_ACTIVE_SURFACE = 'bg-rose-600 border-rose-600 text-white';
 
 const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): string[] => {
   const chain: string[] = [];
@@ -373,7 +383,8 @@ export default function ContextMap() {
     projects, activeProjectId, nodes, branches, mainlines, contexts,
     cycleNodeInclusionState, setMainlineEndpoints, createBranch, jumpToNode, batchToggleInclusion,
     pastStructureSnapshots, futureStructureSnapshots, undoStructureChange, redoStructureChange, resetStructureToNatural, naturalMainlines,
-    createPattern
+    createPattern, previewDeleteSelectedNodes, deleteSelectedNodes,
+    isNodeSelectionMode, nodeSelectionIntent, selectedNodeIds, startNodeSelectionMode, finishNodeSelectionMode, clearNodeSelection, toggleNodeSelection, applyNodeSelectionChanges
   } = useAppStore();
   
   const [flowNodes, setFlowNodes] = useNodesState([]);
@@ -383,10 +394,9 @@ export default function ContextMap() {
   
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
   const [selectedStartId, setSelectedStartId] = useState<string | null>(null);
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [pendingPatternType, setPendingPatternType] = useState<PatternType>('reasoning');
   const [isExtractingPattern, setIsExtractingPattern] = useState(false);
+  const [pendingDeletePreview, setPendingDeletePreview] = useState<DeleteSelectionPreview | null>(null);
   const [selectionNotice, setSelectionNotice] = useState<SelectionNotice | null>(null);
   const [isSelectionNoticeExpanded, setIsSelectionNoticeExpanded] = useState(false);
   
@@ -395,13 +405,32 @@ export default function ContextMap() {
   const previousLayoutModeRef = useRef<LayoutMode>('tree');
   const previousLayoutRefreshTokenRef = useRef(0);
   const previousStructureSignatureRef = useRef<string>('');
-
-  const project = activeProjectId ? projects[activeProjectId] : null;
-  const context = project ? contexts[project.active_context_id] : null;
-  const isMainline = context?.base_path === 'mainline';
-  const currentBranch = !isMainline && context ? branches[context.base_path] : null;
+  const liveProject = activeProjectId ? projects[activeProjectId] : null;
+  const liveContext = liveProject ? contexts[liveProject.active_context_id] : null;
+  const previewState = pendingDeletePreview?.candidate ?? null;
+  const renderProjects = previewState?.projects ?? projects;
+  const renderNodes = previewState?.nodes ?? nodes;
+  const renderBranches = previewState?.branches ?? branches;
+  const renderMainlines = previewState?.mainlines ?? mainlines;
+  const renderContexts = previewState?.contexts ?? contexts;
+  const renderProject = activeProjectId ? renderProjects[activeProjectId] : null;
+  const renderContext = renderProject ? renderContexts[renderProject.active_context_id] : null;
+  const previewNodeVariants = pendingDeletePreview?.nodeVariants ?? {};
+  const isDeletePreviewActive = !!pendingDeletePreview;
+  const project = liveProject;
+  const context = liveContext;
+  const isSelectionMode = isNodeSelectionMode;
+  const selectionIntent = nodeSelectionIntent;
 
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    syncBodyClassToggle(document.body, CONTEXT_MAP_SELECTION_BODY_CLASS, isSelectionMode);
+    return () => {
+      syncBodyClassToggle(document.body, CONTEXT_MAP_SELECTION_BODY_CLASS, false);
+    };
+  }, [isSelectionMode]);
 
   const emitSelectionNotice = useCallback((notice: SelectionNotice | null) => {
     setSelectionNotice(notice);
@@ -409,18 +438,20 @@ export default function ContextMap() {
   }, []);
 
   const clearSelectionState = useCallback(() => {
-    setSelectedNodeIds([]);
-  }, []);
+    clearNodeSelection();
+    setPendingDeletePreview(null);
+  }, [clearNodeSelection]);
 
   const finishSelectionMode = useCallback((options: { preserveNotice?: boolean } = {}) => {
     clearSelectionState();
-    setIsSelectionMode(false);
+    finishNodeSelectionMode();
     if (!options.preserveNotice) {
       emitSelectionNotice(null);
     }
-  }, [clearSelectionState, emitSelectionNotice]);
+  }, [clearSelectionState, emitSelectionNotice, finishNodeSelectionMode]);
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
+    if (isDeletePreviewActive) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest('.react-flow__node')) {
       return;
@@ -429,41 +460,29 @@ export default function ContextMap() {
     if (isSelectionMode) {
       clearSelectionState();
     }
-  }, [clearSelectionState, isSelectionMode]);
+  }, [clearSelectionState, isSelectionMode, isDeletePreviewActive]);
 
   const handleSelectionAction = useCallback((event: React.MouseEvent, nodeId: string) => {
     event.stopPropagation();
-    setSelectedNodeIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(nodeId)) {
-        next.delete(nodeId);
-      } else {
-        next.add(nodeId);
-      }
-      return Array.from(next);
-    });
-  }, []);
+    event.preventDefault();
+    toggleNodeSelection(nodeId);
+  }, [toggleNodeSelection]);
 
   const handleNodePrimaryAction = useCallback((event: React.MouseEvent, nodeId: string) => {
+    if (isDeletePreviewActive) return;
     setContextMenu(null);
-    if (!project) return;
+    if (!liveProject) return;
     if (isSelectionMode) {
       handleSelectionAction(event, nodeId);
       return;
     }
-    cycleNodeInclusionState(project.project_id, nodeId);
-  }, [project, isSelectionMode, handleSelectionAction, cycleNodeInclusionState]);
+    cycleNodeInclusionState(liveProject.project_id, nodeId);
+  }, [isDeletePreviewActive, liveProject, isSelectionMode, handleSelectionAction, cycleNodeInclusionState]);
 
   const handleFlowNodesChange = useCallback((changes: NodeChange[]) => {
     const selectChanges = changes.filter((change): change is Extract<NodeChange, { type: 'select' }> => change.type === 'select');
     if (isSelectionMode && selectChanges.length > 0) {
-      setSelectedNodeIds((prev) => {
-        const next = new Set(prev);
-        selectChanges.forEach((change) => {
-          if (change.selected) next.add(change.id);
-        });
-        return Array.from(next);
-      });
+      applyNodeSelectionChanges(selectChanges.map((change) => ({ id: change.id, selected: change.selected })));
     }
     setFlowNodes((prev) => {
       const next = applyNodeChanges(changes.filter((change) => change.type !== 'select'), prev);
@@ -473,56 +492,57 @@ export default function ContextMap() {
         data: {
           ...n.data,
           isSelected: selectedNodeIdSet.has(n.id),
+          isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(n.id),
           selectionIndex: undefined,
         },
       }));
     });
-  }, [isSelectionMode, selectedNodeIdSet, setFlowNodes]);
+  }, [applyNodeSelectionChanges, isSelectionMode, selectedNodeIdSet, selectionIntent, setFlowNodes]);
 
   const resolvedMainlineNodeIds = useMemo(() => {
-    if (!project) return [] as string[];
-    const rawMainline = mainlines[project.project_id] || [];
-    const validMainline = rawMainline.filter((id) => nodes[id]?.project_id === project.project_id);
+    if (!renderProject) return [] as string[];
+    const rawMainline = renderMainlines[renderProject.project_id] || [];
+    const validMainline = rawMainline.filter((id) => renderNodes[id]?.project_id === renderProject.project_id);
     if (validMainline.length > 0) return validMainline;
 
     if (rawMainline.length > 0 && validMainline.length === 0) {
       console.warn('[context-map] all mainline IDs are invalid; falling back to branch_id===null nodes', {
-        projectId: project.project_id,
+        projectId: renderProject.project_id,
         rawMainlineLength: rawMainline.length,
       });
     }
 
-    const fallbackMainline = Object.values(nodes)
-      .filter((n) => n.project_id === project.project_id && n.branch_id === null)
+    const fallbackMainline = Object.values(renderNodes)
+      .filter((n) => n.project_id === renderProject.project_id && n.branch_id === null)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
       .map((n) => n.node_id);
     if (fallbackMainline.length > 0) return fallbackMainline;
 
-    const allProjectNodes = Object.values(nodes)
-      .filter((n) => n.project_id === project.project_id)
+    const allProjectNodes = Object.values(renderNodes)
+      .filter((n) => n.project_id === renderProject.project_id)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     if (allProjectNodes.length > 0) {
       console.warn('[context-map] mainline fallback to earliest project node', {
-        projectId: project.project_id,
+        projectId: renderProject.project_id,
         totalProjectNodes: allProjectNodes.length,
       });
       return [allProjectNodes[0].node_id];
     }
     return [];
-  }, [project, mainlines, nodes]);
+  }, [renderProject, renderMainlines, renderNodes]);
 
   const activeNodeIds = useMemo(() => {
     const ids = new Set<string>();
-    if (!project || !context) return ids;
-    const isMainline = context.base_path === 'mainline';
-    const currentBranch = !isMainline ? branches[context.base_path] : null;
+    if (!renderProject || !renderContext) return ids;
+    const isMainline = renderContext.base_path === 'mainline';
+    const currentBranch = !isMainline ? renderBranches[renderContext.base_path] : null;
 
     if (isMainline) {
       resolvedMainlineNodeIds.forEach(id => ids.add(id));
     } else if (currentBranch) {
-      const branchChainIds = getBranchChainIds(currentBranch.branch_id, branches);
+      const branchChainIds = getBranchChainIds(currentBranch.branch_id, renderBranches);
       const rootBranchId = branchChainIds[0];
-      const rootBranch = rootBranchId ? branches[rootBranchId] : null;
+      const rootBranch = rootBranchId ? renderBranches[rootBranchId] : null;
       const anchorIndex = rootBranch ? resolvedMainlineNodeIds.indexOf(rootBranch.anchor_node_id) : -1;
       if (anchorIndex !== -1) {
         resolvedMainlineNodeIds.slice(0, anchorIndex + 1).forEach(id => ids.add(id));
@@ -530,18 +550,18 @@ export default function ContextMap() {
         resolvedMainlineNodeIds.forEach(id => ids.add(id));
       }
       branchChainIds.forEach((branchId) => {
-        Object.values(nodes)
+        Object.values(renderNodes)
           .filter((n) => n.branch_id === branchId)
           .forEach((n) => ids.add(n.node_id));
       });
     }
     return ids;
-  }, [project, context, resolvedMainlineNodeIds, branches, nodes]);
+  }, [renderProject, renderContext, resolvedMainlineNodeIds, renderBranches, renderNodes]);
 
   const projectNodeCount = useMemo(() => {
-    if (!project) return 0;
-    return Object.values(nodes).filter((n) => n.project_id === project.project_id).length;
-  }, [project, nodes]);
+    if (!renderProject) return 0;
+    return Object.values(renderNodes).filter((n) => n.project_id === renderProject.project_id).length;
+  }, [renderProject, renderNodes]);
 
   const getViewportSnapshot = useCallback(() => {
     if (!rfInstance) return null;
@@ -565,16 +585,17 @@ export default function ContextMap() {
   }, [rfInstance]);
 
   useEffect(() => {
-    if (!project || !context) return;
+    if (!renderProject || !renderContext) return;
 
     const mainlineNodeIds = resolvedMainlineNodeIds;
     const modeChanged = previousLayoutModeRef.current !== layoutMode;
     const relayoutRequested = previousLayoutRefreshTokenRef.current !== layoutRefreshToken;
 
-    const projectNodes = Object.values(nodes).filter((n) => n.project_id === project.project_id);
-    const projectBranches = Object.values(branches).filter((branch) => branch.project_id === project.project_id);
+    const projectNodes = Object.values(renderNodes).filter((n) => n.project_id === renderProject.project_id);
+    const projectBranches = Object.values(renderBranches).filter((branch) => branch.project_id === renderProject.project_id);
 
     const structureSignature = JSON.stringify({
+      source: isDeletePreviewActive ? 'preview' : 'live',
       mainline: mainlineNodeIds,
       projectNodes: projectNodes
         .map((n) => `${n.node_id}:${n.parent_id ?? 'null'}:${n.branch_id ?? 'mainline'}`)
@@ -590,20 +611,24 @@ export default function ContextMap() {
         if (prevNodes.length === 0) return prevNodes;
         let changed = false;
         const updated = prevNodes.map((fn) => {
-          const currentNode = nodes[fn.id];
+          const currentNode = renderNodes[fn.id];
           if (!currentNode) return fn;
           const nextIsActive = activeNodeIds.has(fn.id);
-          const nextIsExcluded = context.excluded_nodes.includes(fn.id);
-          const nextIsIncluded = context.included_nodes.includes(fn.id);
+          const nextIsExcluded = renderContext.excluded_nodes.includes(fn.id);
+          const nextIsIncluded = renderContext.included_nodes.includes(fn.id);
           const nextIsSelectedStart = fn.id === selectedStartId;
           const nextIsSelected = selectedNodeIdSet.has(fn.id);
+          const nextIsDeleteSelected = selectionIntent === 'delete' && nextIsSelected;
+          const nextIsPlaceholder = currentNode.metadata.is_delete_placeholder || previewNodeVariants[fn.id] === 'placeholder';
           const dataChanged =
             fn.data.content !== currentNode.content ||
             fn.data.isActive !== nextIsActive ||
             fn.data.isExcluded !== nextIsExcluded ||
             fn.data.isIncluded !== nextIsIncluded ||
             fn.data.isSelectedStart !== nextIsSelectedStart ||
-            fn.data.isSelected !== nextIsSelected;
+            fn.data.isSelected !== nextIsSelected ||
+            fn.data.isDeleteSelected !== nextIsDeleteSelected ||
+            fn.data.isPlaceholder !== nextIsPlaceholder;
           if (!dataChanged) return fn;
           changed = true;
           return {
@@ -617,6 +642,8 @@ export default function ContextMap() {
               isIncluded: nextIsIncluded,
               isSelectedStart: nextIsSelectedStart,
               isSelected: nextIsSelected,
+              isDeleteSelected: nextIsDeleteSelected,
+              isPlaceholder: nextIsPlaceholder,
               selectionIndex: undefined,
             },
           };
@@ -637,7 +664,7 @@ export default function ContextMap() {
 
     if (projectNodes.length > 0 && mainlineNodeIds.length === 0) {
       console.warn('[context-map] project has nodes but resolved mainline is empty', {
-        projectId: project.project_id,
+        projectId: renderProject.project_id,
         projectNodeCount: projectNodes.length,
       });
     }
@@ -653,7 +680,7 @@ export default function ContextMap() {
 
     if (orphanNodesByBranchId.size > 0) {
       console.warn('[context-map] rendering orphan branch groups', {
-        projectId: project.project_id,
+        projectId: renderProject.project_id,
         orphanBranchCount: orphanNodesByBranchId.size,
       });
     }
@@ -662,7 +689,7 @@ export default function ContextMap() {
       const sorted = [...orphanNodes].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
       const firstNode = sorted[0];
       const anchorNodeId =
-        (firstNode.parent_id && nodes[firstNode.parent_id]?.project_id === project.project_id
+        (firstNode.parent_id && renderNodes[firstNode.parent_id]?.project_id === renderProject.project_id
           ? firstNode.parent_id
           : null) ||
         mainlineNodeIds[0] ||
@@ -670,7 +697,7 @@ export default function ContextMap() {
 
       return {
         branch_id: branchId,
-        project_id: project.project_id,
+        project_id: renderProject.project_id,
         anchor_node_id: anchorNodeId,
         parent_branch_id: null,
         status: 'active',
@@ -684,7 +711,7 @@ export default function ContextMap() {
           .filter((n) => n.branch_id === branch.branch_id)
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
       }))
-      .filter((group) => group.branchNodes.length > 0 && !!nodes[group.branch.anchor_node_id])
+      .filter((group) => group.branchNodes.length > 0 && !!renderNodes[group.branch.anchor_node_id])
       .sort((a, b) => {
         const aIndex = mainlineNodeIds.indexOf(a.branch.anchor_node_id);
         const bIndex = mainlineNodeIds.indexOf(b.branch.anchor_node_id);
@@ -746,6 +773,7 @@ export default function ContextMap() {
     }
 
     const handleContextMenu = (e: React.MouseEvent, nodeId: string) => {
+      if (isDeletePreviewActive) return;
       e.preventDefault();
       
       const menuWidth = 180;
@@ -766,7 +794,7 @@ export default function ContextMap() {
 
     // Place mainline nodes
     mainlineNodeIds.forEach((nodeId, index) => {
-      const node = nodes[nodeId];
+      const node = renderNodes[nodeId];
       if (!node) return;
 
       initialNodes.push({
@@ -778,10 +806,12 @@ export default function ContextMap() {
           content: node.content,
           branchId: node.branch_id,
           isActive: activeNodeIds.has(nodeId),
-          isExcluded: context.excluded_nodes.includes(nodeId),
-          isIncluded: context.included_nodes.includes(nodeId),
+          isExcluded: renderContext.excluded_nodes.includes(nodeId),
+          isIncluded: renderContext.included_nodes.includes(nodeId),
           isSelectedStart: nodeId === selectedStartId,
           isSelected: selectedNodeIdSet.has(nodeId),
+          isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(nodeId),
+          isPlaceholder: node.metadata.is_delete_placeholder || previewNodeVariants[nodeId] === 'placeholder',
           selectionIndex: undefined,
           onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, nodeId),
           onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, nodeId),
@@ -803,7 +833,7 @@ export default function ContextMap() {
     const addedNodeIds = new Set(initialNodes.map((n) => n.id));
     projectBranchGroups.forEach(({ branch }) => {
       if (addedNodeIds.has(branch.anchor_node_id)) return;
-      const anchorNode = nodes[branch.anchor_node_id];
+      const anchorNode = renderNodes[branch.anchor_node_id];
       if (!anchorNode) return;
       initialNodes.push({
         id: branch.anchor_node_id,
@@ -814,10 +844,12 @@ export default function ContextMap() {
           content: anchorNode.content,
           branchId: anchorNode.branch_id,
           isActive: activeNodeIds.has(branch.anchor_node_id),
-          isExcluded: context.excluded_nodes.includes(branch.anchor_node_id),
-          isIncluded: context.included_nodes.includes(branch.anchor_node_id),
+          isExcluded: renderContext.excluded_nodes.includes(branch.anchor_node_id),
+          isIncluded: renderContext.included_nodes.includes(branch.anchor_node_id),
           isSelectedStart: branch.anchor_node_id === selectedStartId,
           isSelected: selectedNodeIdSet.has(branch.anchor_node_id),
+          isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(branch.anchor_node_id),
+          isPlaceholder: anchorNode.metadata.is_delete_placeholder || previewNodeVariants[branch.anchor_node_id] === 'placeholder',
           selectionIndex: undefined,
           onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, branch.anchor_node_id),
           onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, branch.anchor_node_id),
@@ -840,10 +872,12 @@ export default function ContextMap() {
               content: node.content,
               branchId: node.branch_id,
               isActive: activeNodeIds.has(node.node_id),
-              isExcluded: context.excluded_nodes.includes(node.node_id),
-              isIncluded: context.included_nodes.includes(node.node_id),
+              isExcluded: renderContext.excluded_nodes.includes(node.node_id),
+              isIncluded: renderContext.included_nodes.includes(node.node_id),
               isSelectedStart: node.node_id === selectedStartId,
               isSelected: selectedNodeIdSet.has(node.node_id),
+              isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(node.node_id),
+              isPlaceholder: node.metadata.is_delete_placeholder || previewNodeVariants[node.node_id] === 'placeholder',
               selectionIndex: undefined,
               onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, node.node_id),
               onContextMenu: (e: React.MouseEvent) => handleContextMenu(e, node.node_id),
@@ -881,8 +915,8 @@ export default function ContextMap() {
     });
 
     logContextMapDebug('layout-start', {
-      projectId: project.project_id,
-      basePath: context.base_path,
+      projectId: renderProject.project_id,
+      basePath: renderContext.base_path,
       projectNodeCount: projectNodes.length,
       mainlineNodeCount: mainlineNodeIds.length,
       branchGroupCount: projectBranchGroups.length,
@@ -895,8 +929,8 @@ export default function ContextMap() {
     if (startViewport) {
       logContextMapDebug('viewport-snapshot', {
         phase: 'layout-start',
-        projectId: project.project_id,
-        basePath: context.base_path,
+        projectId: renderProject.project_id,
+        basePath: renderContext.base_path,
         ...startViewport,
       });
     }
@@ -910,8 +944,8 @@ export default function ContextMap() {
           : getStructuredPositions(dagreNodes, mainlineNodeIds, projectBranchGroups, branchSideById, layoutMode);
 
       logContextMapDebug('layout-result', {
-        projectId: project.project_id,
-        basePath: context.base_path,
+        projectId: renderProject.project_id,
+        basePath: renderContext.base_path,
         projectNodeCount: projectNodes.length,
         mainlineNodeCount: mainlineNodeIds.length,
         branchGroupCount: projectBranchGroups.length,
@@ -925,8 +959,8 @@ export default function ContextMap() {
       if (resultViewport) {
         logContextMapDebug('viewport-snapshot', {
           phase: 'layout-result',
-          projectId: project.project_id,
-          basePath: context.base_path,
+          projectId: renderProject.project_id,
+          basePath: renderContext.base_path,
           ...resultViewport,
         });
       }
@@ -951,13 +985,15 @@ export default function ContextMap() {
               data: {
                 ...node.data,
                 isSelected,
+                isDeleteSelected: selectionIntent === 'delete' && isSelected,
+                isPlaceholder: renderNodes[node.id]?.metadata.is_delete_placeholder || previewNodeVariants[node.id] === 'placeholder',
                 selectionIndex: undefined,
               },
             };
           });
           logContextMapDebug('flow-commit', {
-            projectId: project.project_id,
-            basePath: context.base_path,
+            projectId: renderProject.project_id,
+            basePath: renderContext.base_path,
             projectNodeCount: projectNodes.length,
             mainlineNodeCount: mainlineNodeIds.length,
             branchGroupCount: projectBranchGroups.length,
@@ -973,8 +1009,8 @@ export default function ContextMap() {
           if (commitViewport) {
             logContextMapDebug('viewport-snapshot', {
               phase: 'flow-commit',
-              projectId: project.project_id,
-              basePath: context.base_path,
+              projectId: renderProject.project_id,
+              basePath: renderContext.base_path,
               ...commitViewport,
             });
           }
@@ -997,6 +1033,8 @@ export default function ContextMap() {
         data: {
           ...node.data,
           isSelected: selectedNodeIdSet.has(node.id),
+          isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(node.id),
+          isPlaceholder: renderNodes[node.id]?.metadata.is_delete_placeholder || previewNodeVariants[node.id] === 'placeholder',
           selectionIndex: undefined,
         },
       })));
@@ -1010,7 +1048,7 @@ export default function ContextMap() {
       });
     }
 
-  }, [nodes, branches, mainlines, contexts, activeProjectId, selectedStartId, activeNodeIds, project, context, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken, resolvedMainlineNodeIds, rfInstance, selectedNodeIdSet, handleNodePrimaryAction]);
+  }, [renderNodes, renderBranches, renderMainlines, renderContexts, activeProjectId, selectedStartId, activeNodeIds, renderProject, renderContext, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken, resolvedMainlineNodeIds, rfInstance, selectedNodeIdSet, selectionIntent, previewNodeVariants, isDeletePreviewActive, handleNodePrimaryAction]);
 
   // Auto fit view on nodes change
   useEffect(() => {
@@ -1022,27 +1060,27 @@ export default function ContextMap() {
   }, [flowNodes.length, rfInstance]); // Only trigger when node count changes
 
   useEffect(() => {
-    if (!rfInstance || !project || !context || flowNodes.length === 0) return;
+    if (!rfInstance || !renderProject || !renderContext || flowNodes.length === 0) return;
     window.requestAnimationFrame(() => {
       rfInstance.fitView({ duration: 250, padding: 0.12 });
     });
-  }, [rfInstance, project?.project_id, context?.base_path]);
+  }, [rfInstance, renderProject?.project_id, renderContext?.base_path, isDeletePreviewActive]);
 
   useEffect(() => {
-    if (!rfInstance || !project) return;
+    if (!rfInstance || !renderProject) return;
     if (projectNodeCount === 0 || flowNodes.length > 0) return;
     console.warn('[context-map] map appears empty while project has nodes; triggering recovery', {
-      projectId: project.project_id,
+      projectId: renderProject.project_id,
       projectNodeCount,
       flowNodesLength: flowNodes.length,
       resolvedMainlineLength: resolvedMainlineNodeIds.length,
-      basePath: context?.base_path,
+      basePath: renderContext?.base_path,
     });
     setLayoutRefreshToken((n) => n + 1);
     window.requestAnimationFrame(() => {
       rfInstance.fitView({ duration: 300, padding: 0.15 });
     });
-  }, [rfInstance, project, projectNodeCount, flowNodes.length, resolvedMainlineNodeIds.length, context?.base_path]);
+  }, [rfInstance, renderProject, projectNodeCount, flowNodes.length, resolvedMainlineNodeIds.length, renderContext?.base_path]);
 
   // Auto fit view on resize
   useEffect(() => {
@@ -1060,6 +1098,10 @@ export default function ContextMap() {
   const canUndoStructure = pastStructureSnapshots.length > 0;
   const canRedoStructure = futureStructureSnapshots.length > 0;
   const hasNaturalResetTarget = !!project && ((mainlines[project.project_id] || []).join('|') !== ((naturalMainlines[project.project_id] || []).join('|')));
+
+  useEffect(() => {
+    setPendingDeletePreview(null);
+  }, [selectedNodeIds, selectionIntent]);
 
   const handleApplySelection = (action: 'include' | 'exclude') => {
     if (!project || !context) return;
@@ -1122,19 +1164,66 @@ export default function ContextMap() {
     }
   };
 
+  const handleStartSelectionMode = useCallback((intent: 'batch' | 'delete') => {
+    clearSelectionState();
+    setContextMenu(null);
+    startNodeSelectionMode(intent);
+  }, [clearSelectionState, startNodeSelectionMode]);
+
   const handleToggleSelectionMode = useCallback(() => {
-    if (isSelectionMode) {
+    if (isSelectionMode && selectionIntent === 'batch') {
       finishSelectionMode();
       return;
     }
-    clearSelectionState();
-    setContextMenu(null);
-    setIsSelectionMode(true);
-  }, [clearSelectionState, finishSelectionMode, isSelectionMode]);
+    handleStartSelectionMode('batch');
+  }, [finishSelectionMode, handleStartSelectionMode, isSelectionMode, selectionIntent]);
+
+  const handleDeleteButton = useCallback(() => {
+    if (!project) return;
+    if (!isSelectionMode || selectionIntent !== 'delete') {
+      handleStartSelectionMode('delete');
+      return;
+    }
+    if (selectedNodeIds.length === 0) {
+      emitSelectionNotice({
+        id: `delete-select-first-${Date.now()}`,
+        tone: 'warning',
+        title: 'Choose nodes to delete first',
+        message: 'Delete mode is active. Click nodes to mark them for deletion, then preview the result.',
+      });
+      return;
+    }
+    const preview = previewDeleteSelectedNodes(project.project_id, selectedNodeIds);
+    if (!preview) return;
+    setPendingDeletePreview(preview);
+  }, [project, isSelectionMode, selectionIntent, handleStartSelectionMode, selectedNodeIds, emitSelectionNotice, previewDeleteSelectedNodes]);
+
+  const handleConfirmDelete = useCallback(() => {
+    if (!project || selectedNodeIds.length === 0) return;
+    const preview = deleteSelectedNodes(project.project_id, selectedNodeIds);
+    if (!preview) return;
+    finishSelectionMode({ preserveNotice: true });
+    setPendingDeletePreview(null);
+    emitSelectionNotice({
+      id: `delete-confirmed-${Date.now()}`,
+      tone: 'warning',
+      title: 'Selection deleted',
+      message: preview.requiresPlaceholder
+        ? 'The selected nodes were removed and a placeholder was inserted to preserve the remaining branch structure.'
+        : 'The selected nodes were removed and the remaining thread was stitched back together.',
+      details: `${preview.summary}\nUse Undo to restore the previous structure if needed.`,
+      defaultExpanded: true,
+    });
+  }, [project, selectedNodeIds, deleteSelectedNodes, finishSelectionMode, emitSelectionNotice]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (pendingDeletePreview) {
+        event.preventDefault();
+        setPendingDeletePreview(null);
+        return;
+      }
       if (!isSelectionMode) return;
       event.preventDefault();
       if (selectedNodeIds.length > 0) {
@@ -1145,7 +1234,7 @@ export default function ContextMap() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelectionState, finishSelectionMode, isSelectionMode, selectedNodeIds.length]);
+  }, [clearSelectionState, finishSelectionMode, isSelectionMode, pendingDeletePreview, selectedNodeIds.length]);
 
   useEffect(() => {
     if (!selectionNotice) return;
@@ -1156,9 +1245,9 @@ export default function ContextMap() {
   }, [selectionNotice]);
 
   const handleRearrangeAndCenter = useCallback(() => {
-    if (!project || !rfInstance) return;
+    if (!renderProject || !rfInstance) return;
     setLayoutRefreshToken((n) => n + 1);
-    const mainlineNodeIds = new Set(mainlines[project.project_id] || []);
+    const mainlineNodeIds = new Set(renderMainlines[renderProject.project_id] || []);
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         const renderedNodes = (rfInstance.getNodes?.() || []) as FlowNode[];
@@ -1170,14 +1259,7 @@ export default function ContextMap() {
         }
       });
     });
-  }, [project, rfInstance, mainlines]);
-
-  const handleFitAll = useCallback(() => {
-    if (!rfInstance) return;
-    window.requestAnimationFrame(() => {
-      rfInstance.fitView({ duration: 400, padding: 0.1 });
-    });
-  }, [rfInstance]);
+  }, [renderProject, rfInstance, renderMainlines]);
 
   const getVisibleNodesForBasePath = useCallback((basePath: string): Node[] => {
     return resolveVisibleNodesForBasePath(basePath, branches, nodes, resolvedMainlineNodeIds);
@@ -1248,10 +1330,10 @@ export default function ContextMap() {
             <div className="h-5 w-px bg-zinc-300" />
             <button
               onClick={undoStructureChange}
-              disabled={!canUndoStructure}
+              disabled={!canUndoStructure || isDeletePreviewActive}
               className={clsx(
                 "p-2 transition-colors flex items-center",
-                canUndoStructure ? "bg-white text-zinc-600 hover:bg-zinc-100" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
+                canUndoStructure && !isDeletePreviewActive ? "bg-white text-zinc-600 hover:bg-zinc-100" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
               )}
               title="Undo last mainline/branch change"
               aria-label="Undo"
@@ -1260,10 +1342,10 @@ export default function ContextMap() {
             </button>
             <button
               onClick={redoStructureChange}
-              disabled={!canRedoStructure}
+              disabled={!canRedoStructure || isDeletePreviewActive}
               className={clsx(
                 "p-2 transition-colors border-l border-zinc-300 flex items-center",
-                canRedoStructure ? "bg-white text-zinc-600 hover:bg-zinc-100" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
+                canRedoStructure && !isDeletePreviewActive ? "bg-white text-zinc-600 hover:bg-zinc-100" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
               )}
               title="Redo last mainline/branch change"
               aria-label="Redo"
@@ -1272,10 +1354,10 @@ export default function ContextMap() {
             </button>
             <button
               onClick={() => project && resetStructureToNatural(project.project_id)}
-              disabled={!hasNaturalResetTarget}
+              disabled={!hasNaturalResetTarget || isDeletePreviewActive}
               className={clsx(
                 "p-2 transition-colors border-l border-zinc-300 flex items-center",
-                hasNaturalResetTarget
+                hasNaturalResetTarget && !isDeletePreviewActive
                   ? "bg-white text-zinc-600 hover:bg-zinc-100"
                   : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
               )}
@@ -1288,7 +1370,11 @@ export default function ContextMap() {
           <div className="text-xs text-zinc-500 flex items-center gap-1">
             <MousePointerSquareDashed size={14} />
             <span className="hidden md:inline">
-              {isSelectionMode ? 'Selection active: click add, Shift+drag box' : 'Click toggles node context'}
+              {isSelectionMode
+                ? selectionIntent === 'delete'
+                  ? 'Delete mode: select nodes, preview, then confirm'
+                  : 'Selection active: click add, Shift+drag box'
+                : 'Click toggles node context'}
             </span>
           </div>
         </div>
@@ -1300,11 +1386,12 @@ export default function ContextMap() {
           edges={flowEdges}
           onNodesChange={handleFlowNodesChange}
           onEdgesChange={onEdgesChange}
+          onNodeClick={(event, node) => handleNodePrimaryAction(event as React.MouseEvent, node.id)}
           nodeTypes={nodeTypes}
           onPaneClick={onPaneClick}
           onInit={setRfInstance}
-          elementsSelectable={isSelectionMode}
-          nodesDraggable={!isSelectionMode}
+          elementsSelectable={false}
+          nodesDraggable={!isSelectionMode && !isDeletePreviewActive}
           selectionMode={SelectionMode.Partial}
           selectionOnDrag={false}
           panOnScroll={false}
@@ -1321,15 +1408,15 @@ export default function ContextMap() {
             onClick={handleToggleSelectionMode}
             className={clsx(
               "min-w-0 flex-1 overflow-hidden text-xs px-2.5 py-2 rounded-xl border transition-all flex items-center justify-center gap-1.5",
-              isSelectionMode
+              isSelectionMode && selectionIntent === 'batch'
                 ? `${SELECTION_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(39,39,42,0.18)]`
                 : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
             )}
             title={isSelectionMode ? 'Finish node selection mode' : 'Start selecting nodes for batch actions'}
           >
-            {isSelectionMode ? <X size={13} className="!text-white" /> : <Sparkles size={13} className="text-inherit" />}
-            <span className={clsx("truncate", isSelectionMode && "!text-white")}>
-              {isSelectionMode ? 'Finish' : 'Selection'}
+            {isSelectionMode && selectionIntent === 'batch' ? <X size={13} className="!text-white" /> : <Sparkles size={13} className="text-inherit" />}
+            <span className={clsx("truncate", isSelectionMode && selectionIntent === 'batch' && "!text-white")}>
+              {isSelectionMode && selectionIntent === 'batch' ? 'Finish' : 'Selection'}
             </span>
           </button>
           <button
@@ -1341,18 +1428,23 @@ export default function ContextMap() {
             <span className="truncate">Rearrange</span>
           </button>
           <button
-            onClick={handleFitAll}
-            className="min-w-0 shrink-0 text-xs text-zinc-600 px-2.5 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center justify-center gap-1"
-            title="Fit entire graph"
+            onClick={handleDeleteButton}
+            className={clsx(
+              "min-w-0 shrink-0 text-xs px-2.5 py-2 rounded-xl border transition-colors flex items-center justify-center gap-1",
+              isSelectionMode && selectionIntent === 'delete'
+                ? `${DELETE_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(225,29,72,0.18)]`
+                : "text-rose-700 border-rose-200 bg-rose-50 hover:bg-rose-100"
+            )}
+            title={isSelectionMode && selectionIntent === 'delete' ? 'Preview and confirm delete for selected nodes' : 'Start delete selection mode'}
           >
-            <Maximize2 size={13} />
-            <span className="truncate">Fit</span>
+            <Trash2 size={13} />
+            <span className="truncate">{isSelectionMode && selectionIntent === 'delete' ? 'Delete' : 'Delete'}</span>
           </button>
           {projectNodeCount > 0 && flowNodes.length === 0 && (
             <button
               onClick={() => {
                 setLayoutRefreshToken((n) => n + 1);
-                handleFitAll();
+                handleRearrangeAndCenter();
               }}
               className="text-xs text-amber-700 px-2 py-1 rounded-md border border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors"
               title="Recover map rendering"
@@ -1361,6 +1453,56 @@ export default function ContextMap() {
             </button>
           )}
         </div>
+
+        {pendingDeletePreview && (
+          <div
+            className="absolute left-4 top-20 z-20 w-[min(24rem,calc(100%-2rem))] rounded-[1.2rem] border border-rose-200 bg-white/95 p-3 shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur-xl"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="mb-1 inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-rose-700">
+                  <Trash2 size={12} />
+                  Delete Preview
+                </div>
+                <h3 className="text-sm font-semibold text-slate-950">Previewing the post-delete context map</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  {pendingDeletePreview.summary}
+                </p>
+              </div>
+              <button
+                onClick={() => setPendingDeletePreview(null)}
+                className="rounded-full border border-zinc-200 p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+                aria-label="Close delete preview"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs leading-5 text-slate-600">
+              {pendingDeletePreview.requiresPlaceholder
+                ? 'Placeholder nodes are highlighted in amber. Rearrange now only affects this previewed structure.'
+                : 'This preview is rendered from the candidate structure only. Cancel keeps the current map unchanged.'}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+              <button
+                onClick={() => setPendingDeletePreview(null)}
+                className="rounded-full border border-zinc-300 bg-white px-3.5 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="inline-flex items-center gap-2 rounded-full border border-rose-600 bg-rose-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-rose-700"
+              >
+                <Trash2 size={15} />
+                Confirm delete
+              </button>
+            </div>
+          </div>
+        )}
 
         {selectionNotice && (
           <div
@@ -1444,7 +1586,7 @@ export default function ContextMap() {
         )}
 
         {/* Floating Batch Action Bar */}
-        {isSelectionMode && selectedNodeIds.length > 0 && (
+        {isSelectionMode && selectionIntent === 'batch' && selectedNodeIds.length > 0 && (
           <div
             className="absolute top-20 right-4 z-20 max-w-[calc(100%-2rem)] rounded-[1.1rem] border border-zinc-200 bg-white/96 p-2 text-slate-900 shadow-[0_10px_26px_rgba(15,23,42,0.1)] backdrop-blur-xl"
             onMouseDown={(e) => e.stopPropagation()}
@@ -1534,6 +1676,44 @@ export default function ContextMap() {
               >
                 <Sparkles size={14} className="text-inherit" />
                 <span>{isBatchBusy ? 'Extracting...' : 'Extract'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {isSelectionMode && selectionIntent === 'delete' && selectedNodeIds.length > 0 && (
+          <div
+            className="absolute top-20 right-4 z-20 max-w-[calc(100%-2rem)] rounded-[1.1rem] border border-rose-200 bg-white/96 p-2 text-slate-900 shadow-[0_10px_26px_rgba(225,29,72,0.1)] backdrop-blur-xl"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className={clsx("mr-1 flex items-center gap-1.5 rounded-full px-2.5 py-1.5", DELETE_ACTIVE_SURFACE)}>
+                <span className="text-xs font-semibold leading-none">
+                  {selectedNodeIds.length}
+                </span>
+                <span className="text-[11px] font-medium leading-none">
+                  marked
+                </span>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteButton();
+                }}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-100"
+              >
+                <Trash2 size={14} />
+                Preview delete
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  clearSelectionState();
+                }}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+              >
+                Clear
               </button>
             </div>
           </div>

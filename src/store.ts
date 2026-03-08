@@ -1,15 +1,20 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
-import { Project, Node, Branch, ContextView, Pattern, PatternType, Role } from './types';
-import { mergeRecoveredChatState, type RecoveredChatState } from './services/chatHistory';
+import { Project, Node, Branch, ContextView, Pattern, PatternType, Role, DeleteSelectionPreview, SelectionIntent } from './types';
+import { logDeletedChatNodes, mergeRecoveredChatState, type RecoveredChatState } from './services/chatHistory';
 import { logPatternDelete, logPatternUpsert, mergeRemotePatternsIntoPatterns, type PatternSyncRecord } from './services/patternSync';
+import { reconcileSelectedNodeIds } from './utils/selectionState';
 
 type StructureSnapshot = {
+  projects: Record<string, Project>;
   nodes: Record<string, Node>;
   branches: Record<string, Branch>;
   mainlines: Record<string, string[]>;
   contexts: Record<string, ContextView>;
+  naturalMainlines: Record<string, string[]>;
+  naturalBranches: Record<string, Branch>;
+  deletedNodeIds: string[];
 };
 
 interface AppState {
@@ -23,6 +28,10 @@ interface AppState {
   futureStructureSnapshots: StructureSnapshot[];
   naturalMainlines: Record<string, string[]>;
   naturalBranches: Record<string, Branch>;
+  deletedNodeIds: string[];
+  isNodeSelectionMode: boolean;
+  nodeSelectionIntent: SelectionIntent;
+  selectedNodeIds: string[];
   
   activeProjectId: string | null;
   
@@ -62,10 +71,17 @@ interface AppState {
   deletePattern: (patternId: string) => void;
   batchToggleInclusion: (projectId: string, nodeIds: string[], action: 'include' | 'exclude') => void;
   setMainlineEndpoints: (projectId: string, startId: string, endId: string) => void;
+  previewDeleteSelectedNodes: (projectId: string, nodeIds: string[]) => DeleteSelectionPreview | null;
+  deleteSelectedNodes: (projectId: string, nodeIds: string[]) => DeleteSelectionPreview | null;
   jumpToNode: (projectId: string, nodeId: string) => void;
   undoStructureChange: () => void;
   redoStructureChange: () => void;
   resetStructureToNatural: (projectId: string) => void;
+  startNodeSelectionMode: (intent: SelectionIntent) => void;
+  finishNodeSelectionMode: () => void;
+  clearNodeSelection: () => void;
+  toggleNodeSelection: (nodeId: string) => void;
+  applyNodeSelectionChanges: (changes: Array<{ id: string; selected: boolean }>) => void;
 }
 
 const EXAMPLE_PROJECT_ID = 'example-project';
@@ -244,10 +260,14 @@ const userScopedStorage: StateStorage = {
 };
 
 const pickStructure = (state: AppState): StructureSnapshot => ({
+  projects: state.projects,
   nodes: state.nodes,
   branches: state.branches,
   mainlines: state.mainlines,
   contexts: state.contexts,
+  naturalMainlines: state.naturalMainlines,
+  naturalBranches: state.naturalBranches,
+  deletedNodeIds: state.deletedNodeIds,
 });
 
 const withNaturalOriginBranch = (node: Node): Node => {
@@ -416,6 +436,440 @@ const ensureNonEmptyMainline = (
   return { mainline: [fallbackNodeId], repairedNodeId: fallbackNodeId };
 };
 
+type DeleteStructureResult = {
+  projects: Record<string, Project>;
+  nodes: Record<string, Node>;
+  branches: Record<string, Branch>;
+  mainlines: Record<string, string[]>;
+  contexts: Record<string, ContextView>;
+  naturalMainlines: Record<string, string[]>;
+  naturalBranches: Record<string, Branch>;
+  preview: DeleteSelectionPreview;
+};
+
+type DeletePlannerState = Pick<
+  AppState,
+  'projects' | 'nodes' | 'branches' | 'mainlines' | 'contexts' | 'naturalMainlines' | 'naturalBranches' | 'activeProjectId' | 'deletedNodeIds'
+>;
+
+const filterRecoveredChatStateByDeletedNodeIds = (
+  recoveredState: RecoveredChatState,
+  deletedNodeIds: string[]
+): RecoveredChatState => {
+  if (deletedNodeIds.length === 0) return recoveredState;
+
+  const deletedSet = new Set(deletedNodeIds);
+  const nodes = Object.fromEntries(
+    Object.entries(recoveredState.nodes).filter(([nodeId]) => !deletedSet.has(nodeId))
+  ) as Record<string, Node>;
+
+  const branches = Object.fromEntries(
+    Object.entries(recoveredState.branches).filter(([, branch]) => {
+      if (deletedSet.has(branch.anchor_node_id)) return false;
+      return Object.values(nodes).some((node) => node.branch_id === branch.branch_id);
+    })
+  ) as Record<string, Branch>;
+
+  const naturalBranches = Object.fromEntries(
+    Object.entries(recoveredState.naturalBranches).filter(([, branch]) => {
+      if (deletedSet.has(branch.anchor_node_id)) return false;
+      return Object.values(nodes).some((node) => node.branch_id === branch.branch_id);
+    })
+  ) as Record<string, Branch>;
+
+  const mainlines = Object.fromEntries(
+    Object.entries(recoveredState.mainlines).map(([projectId, ids]) => [
+      projectId,
+      ids.filter((nodeId) => !deletedSet.has(nodeId) && !!nodes[nodeId]),
+    ])
+  ) as Record<string, string[]>;
+
+  const naturalMainlines = Object.fromEntries(
+    Object.entries(recoveredState.naturalMainlines).map(([projectId, ids]) => [
+      projectId,
+      ids.filter((nodeId) => !deletedSet.has(nodeId) && !!nodes[nodeId]),
+    ])
+  ) as Record<string, string[]>;
+
+  const projects = Object.fromEntries(
+    Object.entries(recoveredState.projects).map(([projectId, project]) => {
+      const nextRootNodeId =
+        (!project.root_node_id || deletedSet.has(project.root_node_id) ? null : project.root_node_id) ||
+        mainlines[projectId]?.[0] ||
+        Object.values(nodes).find((node) => node.project_id === projectId)?.node_id ||
+        null;
+      return [
+        projectId,
+        {
+          ...project,
+          root_node_id: nextRootNodeId,
+        },
+      ];
+    })
+  ) as Record<string, Project>;
+
+  const contexts = Object.fromEntries(
+    Object.entries(recoveredState.contexts).map(([contextId, context]) => [
+      contextId,
+      {
+        ...context,
+        base_path: context.base_path === 'mainline' || branches[context.base_path] ? context.base_path : 'mainline',
+        included_nodes: context.included_nodes.filter((nodeId) => !!nodes[nodeId]),
+        excluded_nodes: context.excluded_nodes.filter((nodeId) => !!nodes[nodeId]),
+      },
+    ])
+  ) as Record<string, ContextView>;
+
+  return {
+    ...recoveredState,
+    projects,
+    nodes,
+    branches,
+    mainlines,
+    contexts,
+    naturalMainlines,
+    naturalBranches,
+  };
+};
+
+const DELETE_PLACEHOLDER_CONTENT = '[Deleted messages]';
+
+const buildPreviewNode = (
+  id: string,
+  label: string,
+  role: Role,
+  variant: 'normal' | 'selected' | 'placeholder'
+) => ({ id, label, role, variant });
+
+const buildPreviewNodeVariants = (
+  previewNodes: Array<{ id: string; variant: 'normal' | 'selected' | 'placeholder' }>
+) => Object.fromEntries(previewNodes.map((node) => [node.id, node.variant])) as Record<string, 'normal' | 'selected' | 'placeholder'>;
+
+const buildPreviewEdgeList = (previewNodes: { id: string }[], nodesById: Record<string, Node>) =>
+  previewNodes.flatMap((node) => {
+    const current = nodesById[node.id];
+    if (!current?.parent_id) return [];
+    if (!previewNodes.some((candidate) => candidate.id === current.parent_id)) return [];
+    return [{ source: current.parent_id, target: current.node_id }];
+  });
+
+const deriveDeleteSelectionStructure = (
+  state: DeletePlannerState,
+  projectId: string,
+  rawNodeIds: string[]
+): DeleteStructureResult | null => {
+  const project = state.projects[projectId];
+  if (!project) return null;
+
+  const selectedNodeIds = Array.from(new Set(rawNodeIds)).filter((nodeId) => state.nodes[nodeId]?.project_id === projectId);
+  if (selectedNodeIds.length === 0) return null;
+
+  const selectedSet = new Set(selectedNodeIds);
+  const projectNodes = Object.values(state.nodes)
+    .filter((node) => node.project_id === projectId)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const projectNodeSet = new Set(projectNodes.map((node) => node.node_id));
+  const childrenByParent = new Map<string, Node[]>();
+
+  projectNodes.forEach((node) => {
+    if (!node.parent_id || !projectNodeSet.has(node.parent_id)) return;
+    if (!childrenByParent.has(node.parent_id)) {
+      childrenByParent.set(node.parent_id, []);
+    }
+    childrenByParent.get(node.parent_id)!.push(node);
+  });
+
+  const selectedRoots = projectNodes.filter((node) => selectedSet.has(node.node_id) && (!node.parent_id || !selectedSet.has(node.parent_id)));
+  const componentBySelectedNode = new Map<string, string>();
+  const componentFrontierParent = new Map<string, string | null>();
+  const componentFrontierChildren = new Map<string, Set<string>>();
+  const componentPlaceholderIds = new Map<string, string>();
+  const placeholderIds: string[] = [];
+  const childParentOverrides = new Map<string, string | null>();
+  const nodesToKeep = new Map<string, Node>();
+
+  projectNodes.forEach((node) => {
+    if (!selectedSet.has(node.node_id)) {
+      nodesToKeep.set(node.node_id, node);
+    }
+  });
+
+  selectedRoots.forEach((root) => {
+    const componentId = root.node_id;
+    const stack = [root.node_id];
+    const componentSelectedIds = new Set<string>();
+
+    while (stack.length > 0) {
+      const currentId = stack.pop()!;
+      if (componentSelectedIds.has(currentId)) continue;
+      componentSelectedIds.add(currentId);
+      componentBySelectedNode.set(currentId, componentId);
+      (childrenByParent.get(currentId) || []).forEach((child) => {
+        if (selectedSet.has(child.node_id)) {
+          stack.push(child.node_id);
+        }
+      });
+    }
+
+    const frontierChildren = new Set<string>();
+    componentSelectedIds.forEach((selectedId) => {
+      (childrenByParent.get(selectedId) || []).forEach((child) => {
+        if (!selectedSet.has(child.node_id)) {
+          frontierChildren.add(child.node_id);
+        }
+      });
+    });
+
+    const hasSurvivingAnchoredBranch = Object.values(state.branches).some((branch) => {
+      if (branch.project_id !== projectId) return false;
+      if (!componentSelectedIds.has(branch.anchor_node_id)) return false;
+      return projectNodes.some((node) => node.branch_id === branch.branch_id && !selectedSet.has(node.node_id));
+    });
+
+    const needsPlaceholder = frontierChildren.size > 1 || hasSurvivingAnchoredBranch;
+    componentFrontierChildren.set(componentId, frontierChildren);
+
+    const rootParentId = root.parent_id && !selectedSet.has(root.parent_id) ? root.parent_id : null;
+    componentFrontierParent.set(componentId, rootParentId);
+
+    if (!needsPlaceholder) return;
+
+    const placeholderId = `placeholder-${uuidv4()}`;
+    const placeholderNode: Node = {
+      node_id: placeholderId,
+      project_id: projectId,
+      parent_id: rootParentId,
+      role: 'system',
+      content: DELETE_PLACEHOLDER_CONTENT,
+      branch_id: root.branch_id ?? null,
+      timestamp: root.timestamp,
+      metadata: {
+        natural_origin_branch_id: root.branch_id ?? null,
+        is_delete_placeholder: true,
+      },
+    };
+    componentPlaceholderIds.set(componentId, placeholderId);
+    placeholderIds.push(placeholderId);
+    nodesToKeep.set(placeholderId, placeholderNode);
+  });
+
+  componentFrontierChildren.forEach((frontierChildren, componentId) => {
+    const placeholderId = componentPlaceholderIds.get(componentId);
+    const nextParentId = placeholderId ?? componentFrontierParent.get(componentId) ?? null;
+    frontierChildren.forEach((childId) => {
+      childParentOverrides.set(childId, nextParentId);
+    });
+  });
+
+  const nextNodes = Object.fromEntries(
+    Array.from(nodesToKeep.values()).map((node) => {
+      const overriddenParentId = childParentOverrides.has(node.node_id)
+        ? childParentOverrides.get(node.node_id) ?? null
+        : node.parent_id;
+      return [
+        node.node_id,
+        {
+          ...node,
+          parent_id: overriddenParentId,
+        },
+      ];
+    })
+  ) as Record<string, Node>;
+
+  const applyBranchDeletePlan = (sourceBranches: Record<string, Branch>) => {
+    const nextBranches: Record<string, Branch> = {};
+
+    Object.values(sourceBranches).forEach((branch) => {
+      if (branch.project_id !== projectId) {
+        nextBranches[branch.branch_id] = branch;
+        return;
+      }
+
+      const survivingBranchNodes = Object.values(nextNodes).filter((node) => node.project_id === projectId && node.branch_id === branch.branch_id);
+      if (survivingBranchNodes.length === 0) {
+        return;
+      }
+
+      const placeholderAnchorId = componentPlaceholderIds.get(componentBySelectedNode.get(branch.anchor_node_id) || '');
+      const nextAnchorId = placeholderAnchorId || branch.anchor_node_id;
+      if (!nextNodes[nextAnchorId]) {
+        return;
+      }
+
+      nextBranches[branch.branch_id] = {
+        ...branch,
+        anchor_node_id: nextAnchorId,
+      };
+    });
+
+    return nextBranches;
+  };
+
+  const nextBranches = applyBranchDeletePlan(state.branches);
+  const nextNaturalBranches = applyBranchDeletePlan(state.naturalBranches);
+
+  const replaceMainlineSelection = (sourceMainlines: Record<string, string[]>) => {
+    const currentMainline = sourceMainlines[projectId] || [];
+    const handledComponents = new Set<string>();
+    let nextMainline = currentMainline.flatMap((nodeId) => {
+      if (!selectedSet.has(nodeId)) return [nodeId];
+      const componentId = componentBySelectedNode.get(nodeId);
+      if (!componentId || handledComponents.has(componentId)) return [];
+      handledComponents.add(componentId);
+      const placeholderId = componentPlaceholderIds.get(componentId);
+      return placeholderId && nextNodes[placeholderId]?.branch_id === null ? [placeholderId] : [];
+    });
+
+    nextMainline = nextMainline.filter((nodeId) => !!nextNodes[nodeId] && nextNodes[nodeId].project_id === projectId);
+    const repaired = ensureNonEmptyMainline(projectId, nextMainline, nextNodes, [
+      ...placeholderIds,
+      ...Object.keys(nextNodes),
+    ]);
+    if (repaired.repairedNodeId && nextNodes[repaired.repairedNodeId]) {
+      nextNodes[repaired.repairedNodeId] = {
+        ...nextNodes[repaired.repairedNodeId],
+        branch_id: null,
+      };
+    }
+    return {
+      ...sourceMainlines,
+      [projectId]: repaired.mainline,
+    };
+  };
+
+  const nextMainlines = replaceMainlineSelection(state.mainlines);
+  const nextNaturalMainlines = replaceMainlineSelection(state.naturalMainlines);
+
+  const nextContexts = Object.fromEntries(
+    Object.values(state.contexts).map((context) => {
+      if (context.project_id !== projectId) {
+        return [context.context_id, context];
+      }
+
+      const nextBasePath =
+        context.base_path === 'mainline' || nextBranches[context.base_path]
+          ? context.base_path
+          : 'mainline';
+
+      return [
+        context.context_id,
+        {
+          ...context,
+          base_path: nextBasePath,
+          included_nodes: context.included_nodes.filter((nodeId) => !!nextNodes[nodeId]),
+          excluded_nodes: context.excluded_nodes.filter((nodeId) => !!nextNodes[nodeId]),
+        },
+      ];
+    })
+  ) as Record<string, ContextView>;
+
+  const nextProjects = { ...state.projects };
+  const remainingProjectNodes = Object.values(nextNodes)
+    .filter((node) => node.project_id === projectId)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const nextRootNodeId = (nextMainlines[projectId] || [])[0] || remainingProjectNodes[0]?.node_id || null;
+  nextProjects[projectId] = {
+    ...project,
+    root_node_id: nextRootNodeId,
+  };
+
+  const impactedBeforeIds = new Set<string>();
+  selectedNodeIds.forEach((nodeId) => impactedBeforeIds.add(nodeId));
+  selectedRoots.forEach((root) => {
+    if (root.parent_id && state.nodes[root.parent_id]?.project_id === projectId) {
+      impactedBeforeIds.add(root.parent_id);
+    }
+    const frontierChildren = componentFrontierChildren.get(root.node_id) || new Set<string>();
+    frontierChildren.forEach((childId) => impactedBeforeIds.add(childId));
+  });
+
+  const beforePreviewNodes = Array.from(impactedBeforeIds)
+    .map((nodeId) => state.nodes[nodeId])
+    .filter((node): node is Node => !!node)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .map((node) =>
+      buildPreviewNode(
+        node.node_id,
+        compactText(node.content, 32) || node.node_id,
+        node.role,
+        selectedSet.has(node.node_id) ? 'selected' : node.metadata.is_delete_placeholder ? 'placeholder' : 'normal'
+      )
+    );
+
+  const impactedAfterIds = new Set<string>();
+  beforePreviewNodes.forEach((node) => {
+    if (!selectedSet.has(node.id) && nextNodes[node.id]) {
+      impactedAfterIds.add(node.id);
+    }
+  });
+  placeholderIds.forEach((nodeId) => impactedAfterIds.add(nodeId));
+  childParentOverrides.forEach((parentId, childId) => {
+    impactedAfterIds.add(childId);
+    if (parentId) impactedAfterIds.add(parentId);
+  });
+
+  const afterPreviewNodes = Array.from(impactedAfterIds)
+    .map((nodeId) => nextNodes[nodeId])
+    .filter((node): node is Node => !!node)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .map((node) =>
+      buildPreviewNode(
+        node.node_id,
+        compactText(node.content, 32) || node.node_id,
+        node.role,
+        node.metadata.is_delete_placeholder ? 'placeholder' : 'normal'
+      )
+    );
+
+  const previewNodeVariants = buildPreviewNodeVariants([
+    ...beforePreviewNodes,
+    ...afterPreviewNodes,
+  ]);
+
+  const preview: DeleteSelectionPreview = {
+    deletedNodeIds: selectedNodeIds,
+    placeholderNodeIds: placeholderIds,
+    requiresPlaceholder: placeholderIds.length > 0,
+    summary:
+      placeholderIds.length > 0
+        ? `Delete ${selectedNodeIds.length} node(s) and insert ${placeholderIds.length} placeholder node(s) to preserve remaining branches.`
+        : `Delete ${selectedNodeIds.length} node(s) and reconnect the remaining thread.`,
+    nodeVariants: previewNodeVariants,
+    candidate: {
+      projects: nextProjects,
+      nodes: nextNodes,
+      branches: nextBranches,
+      mainlines: nextMainlines,
+      contexts: nextContexts,
+    },
+    before: {
+      nodes: beforePreviewNodes,
+      edges: buildPreviewEdgeList(beforePreviewNodes, state.nodes),
+    },
+    after: {
+      nodes: afterPreviewNodes,
+      edges: buildPreviewEdgeList(afterPreviewNodes, nextNodes),
+    },
+  };
+
+  return {
+    projects: nextProjects,
+    nodes: nextNodes,
+    branches: nextBranches,
+    mainlines: nextMainlines,
+    contexts: nextContexts,
+    naturalMainlines: nextNaturalMainlines,
+    naturalBranches: nextNaturalBranches,
+    preview,
+  };
+};
+
+export const previewDeleteSelectedNodes = (
+  state: DeletePlannerState,
+  projectId: string,
+  nodeIds: string[]
+): DeleteSelectionPreview | null => deriveDeleteSelectionStructure(state, projectId, nodeIds)?.preview ?? null;
+
 export const useAppStore = create<AppState>()(persist((set, get) => {
   const seedExampleData = shouldSeedExampleData();
 
@@ -459,6 +913,10 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       }
     : {},
   naturalBranches: seedExampleData ? exampleBranches : {},
+  deletedNodeIds: [],
+  isNodeSelectionMode: false,
+  nodeSelectionIntent: 'batch',
+  selectedNodeIds: [],
   activeProjectId: seedExampleData ? EXAMPLE_PROJECT_ID : null,
 
   createProject: (title) => {
@@ -517,6 +975,8 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
         branches: newBranches,
         naturalBranches: newNaturalBranches,
         contexts: newContexts,
+        deletedNodeIds: state.deletedNodeIds.filter((nodeId) => newNodes[nodeId]),
+        selectedNodeIds: state.selectedNodeIds.filter((nodeId) => newNodes[nodeId]),
         activeProjectId: state.activeProjectId === projectId ? null : state.activeProjectId,
       };
     });
@@ -1294,6 +1754,43 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     });
   },
 
+  previewDeleteSelectedNodes: (projectId, nodeIds) => {
+    return previewDeleteSelectedNodes(get(), projectId, nodeIds);
+  },
+
+  deleteSelectedNodes: (projectId, nodeIds) => {
+    const planned = previewDeleteSelectedNodes(get(), projectId, nodeIds);
+    if (!planned) return null;
+    const stateBeforeDelete = get();
+    const deletedNodes = nodeIds
+      .map((nodeId) => stateBeforeDelete.nodes[nodeId])
+      .filter((node): node is Node => !!node && node.project_id === projectId);
+    const projectTitle = stateBeforeDelete.projects[projectId]?.title ?? null;
+
+    set((state) => {
+      const result = deriveDeleteSelectionStructure(state, projectId, nodeIds);
+      if (!result) return state;
+      const snapshot = pickStructure(state);
+      const pastStructureSnapshots = [...state.pastStructureSnapshots, snapshot].slice(-MAX_STRUCTURE_HISTORY);
+      return {
+        projects: result.projects,
+        nodes: result.nodes,
+        branches: result.branches,
+        mainlines: result.mainlines,
+        contexts: result.contexts,
+        naturalMainlines: result.naturalMainlines,
+        naturalBranches: result.naturalBranches,
+        deletedNodeIds: Array.from(new Set([...state.deletedNodeIds, ...nodeIds])),
+        pastStructureSnapshots,
+        futureStructureSnapshots: [],
+      };
+    });
+
+    void logDeletedChatNodes(deletedNodes, { projectTitle });
+
+    return planned;
+  },
+
   jumpToNode: (projectId, nodeId) => {
     set((state) => {
       const project = state.projects[projectId];
@@ -1417,6 +1914,49 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       };
     });
   },
+
+  startNodeSelectionMode: (intent) => {
+    set({
+      isNodeSelectionMode: true,
+      nodeSelectionIntent: intent,
+      selectedNodeIds: [],
+    });
+  },
+
+  finishNodeSelectionMode: () => {
+    set({
+      isNodeSelectionMode: false,
+      nodeSelectionIntent: 'batch',
+      selectedNodeIds: [],
+    });
+  },
+
+  clearNodeSelection: () => {
+    set({ selectedNodeIds: [] });
+  },
+
+  toggleNodeSelection: (nodeId) => {
+    set((state) => {
+      const next = new Set(state.selectedNodeIds);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+      return { selectedNodeIds: Array.from(next) };
+    });
+  },
+
+  applyNodeSelectionChanges: (changes) => {
+    if (changes.length === 0) return;
+    set((state) => ({
+      selectedNodeIds: reconcileSelectedNodeIds(state.selectedNodeIds, changes.map((change) => ({
+        type: 'select' as const,
+        id: change.id,
+        selected: change.selected,
+      }))),
+    }));
+  },
 };
 }, {
   name: STORE_PERSIST_KEY,
@@ -1430,6 +1970,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     patterns: state.patterns,
     naturalMainlines: state.naturalMainlines,
     naturalBranches: state.naturalBranches,
+    deletedNodeIds: state.deletedNodeIds,
     activeProjectId: state.activeProjectId,
   }),
   merge: (persistedState, currentState) => {
@@ -1511,6 +2052,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       merged.contexts = currentState.contexts;
       merged.naturalMainlines = currentState.naturalMainlines;
       merged.naturalBranches = currentState.naturalBranches;
+      merged.deletedNodeIds = currentState.deletedNodeIds;
       merged.activeProjectId = currentState.activeProjectId;
     }
     if (!merged.activeProjectId || !merged.projects[merged.activeProjectId]) {
@@ -1549,6 +2091,14 @@ export const mergePatternsFromRemoteRecords = (remoteRecords: PatternSyncRecord[
 
 export const mergeRecoveredChatStateIntoStore = (recoveredState: RecoveredChatState) => {
   useAppStore.setState((state) => {
+    const mergedDeletedNodeIds = Array.from(new Set([
+      ...state.deletedNodeIds,
+      ...recoveredState.deletedNodeIds,
+    ]));
+    const filteredRecoveredState = filterRecoveredChatStateByDeletedNodeIds(
+      recoveredState,
+      mergedDeletedNodeIds
+    );
     const merged = mergeRecoveredChatState(
       {
         projects: state.projects,
@@ -1561,9 +2111,10 @@ export const mergeRecoveredChatStateIntoStore = (recoveredState: RecoveredChatSt
         patterns: state.patterns,
         pastStructureSnapshots: [],
         futureStructureSnapshots: [],
+        deletedNodeIds: state.deletedNodeIds,
         activeProjectId: state.activeProjectId,
       },
-      recoveredState
+      filteredRecoveredState
     );
 
     return {
@@ -1574,6 +2125,7 @@ export const mergeRecoveredChatStateIntoStore = (recoveredState: RecoveredChatSt
       contexts: merged.contexts,
       naturalMainlines: merged.naturalMainlines,
       naturalBranches: merged.naturalBranches,
+      deletedNodeIds: mergedDeletedNodeIds,
       activeProjectId: merged.activeProjectId,
     };
   });

@@ -207,7 +207,8 @@ export default function ConversationStream() {
     projects, activeProjectId, nodes, branches, mainlines, contexts, patterns,
     addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, returnToParentBranch, toggleNodeInclusion,
     updateBranchSummary, updatePattern, approvePattern, deletePattern, createPattern,
-    enablePatternForType, disablePatternForType, updateNodeContent
+    enablePatternForType, disablePatternForType, updateNodeContent,
+    isNodeSelectionMode, nodeSelectionIntent, selectedNodeIds, toggleNodeSelection
   } = useAppStore();
   
   const [input, setInput] = useState('');
@@ -409,6 +410,7 @@ export default function ConversationStream() {
   );
   const enabledPatternMap = context.enabled_patterns_by_type || {};
   const patternAppendix = buildPatternAppendix(enabledPatternMap, patterns);
+  const selectedNodeIdSet = new Set(selectedNodeIds);
 
   useEffect(() => {
     setPatternPage((prev) => Math.min(prev, Math.max(0, totalPatternPages - 1)));
@@ -1251,6 +1253,8 @@ export default function ConversationStream() {
         ) : (
           visibleNodes.map((node) => {
             const isExcluded = context.excluded_nodes.includes(node.node_id);
+            const isSelectionActive = isNodeSelectionMode;
+            const isSelectedNode = selectedNodeIdSet.has(node.node_id);
             const inlineSuggestionTargetNodeId = pendingBranchSuggestion?.nodeIdsToMove[1];
             const inlineSuggestionItems =
               node.role !== 'assistant'
@@ -1290,10 +1294,20 @@ export default function ConversationStream() {
               <div
                 key={node.node_id}
                 id={`node-${node.node_id}`}
-                onClick={(e) => { e.stopPropagation(); }}
+                onMouseDown={(e) => {
+                  if (!isSelectionActive) return;
+                  e.preventDefault();
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isSelectionActive) return;
+                  e.preventDefault();
+                  toggleNodeSelection(node.node_id);
+                }}
                 className={clsx(
-                  'flex flex-col max-w-3xl mx-auto group transition-all cursor-default',
+                  'flex flex-col max-w-3xl mx-auto group transition-all',
                   node.role === 'user' ? "items-end" : "items-start",
+                  isSelectionActive ? 'cursor-pointer' : 'cursor-default',
                   isExcluded && "opacity-40"
                 )}
               >
@@ -1301,38 +1315,54 @@ export default function ConversationStream() {
                   <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
                     {node.role}
                   </span>
+                  {isSelectionActive && (
+                    <span className={clsx(
+                      "text-[10px] px-1.5 py-0.5 rounded-sm font-medium",
+                      isSelectedNode ? "bg-zinc-900 text-white" : nodeSelectionIntent === 'delete' ? "bg-rose-100 text-rose-700" : "bg-sky-100 text-sky-700"
+                    )}>
+                      {isSelectedNode ? 'Selected' : nodeSelectionIntent === 'delete' ? 'Delete mode' : 'Selection mode'}
+                    </span>
+                  )}
                   {isExcluded && (
                     <span className="text-[10px] bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-sm">
                       Excluded from Context
                     </span>
                   )}
                   {/* Re-branch button (visible on hover) */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleReBranch(node.node_id); }}
-                    className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-indigo-600 transition-all text-xs flex items-center gap-1"
-                    title="Re-Branch from Here"
-                  >
-                    <GitBranch size={12} />
-                    Branch
-                  </button>
+                  {!isSelectionActive && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleReBranch(node.node_id); }}
+                      className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-indigo-600 transition-all text-xs flex items-center gap-1"
+                      title="Re-Branch from Here"
+                    >
+                      <GitBranch size={12} />
+                      Branch
+                    </button>
+                  )}
                   {/* Exclude/Include button (visible on hover) */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); toggleNodeInclusion(project.project_id, node.node_id); }}
-                    className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500 transition-all text-xs flex items-center gap-1"
-                    title="Cycle context state"
-                  >
-                    {isExcluded ? <Eye size={12} /> : <EyeOff size={12} />}
-                    Context
-                  </button>
+                  {!isSelectionActive && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleNodeInclusion(project.project_id, node.node_id); }}
+                      className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500 transition-all text-xs flex items-center gap-1"
+                      title="Cycle context state"
+                    >
+                      {isExcluded ? <Eye size={12} /> : <EyeOff size={12} />}
+                      Context
+                    </button>
+                  )}
                 </div>
                 <div
                   className={clsx(
-                    "px-5 py-3.5 rounded-2xl shadow-sm max-w-[85%] text-[15px] leading-relaxed",
+                    "px-5 py-3.5 rounded-2xl shadow-sm max-w-[85%] text-[15px] leading-relaxed border-2 transition-colors",
                     node.role === 'user'
-                      ? "bg-zinc-900 text-zinc-50 rounded-tr-sm"
+                      ? "bg-zinc-900 text-zinc-50 rounded-tr-sm border-zinc-900"
                       : node.role === 'system'
-                      ? "bg-red-50 text-red-900 border border-red-100 rounded-tl-sm"
-                      : "bg-white border border-zinc-200 text-zinc-800 rounded-tl-sm"
+                      ? "bg-red-50 text-red-900 border-red-100 rounded-tl-sm"
+                      : "bg-white border-zinc-200 text-zinc-800 rounded-tl-sm",
+                    isSelectionActive && !isSelectedNode && nodeSelectionIntent === 'delete' && "border-rose-200",
+                    isSelectionActive && !isSelectedNode && nodeSelectionIntent === 'batch' && "border-sky-200",
+                    isSelectedNode && nodeSelectionIntent === 'delete' && "border-rose-500 ring-2 ring-rose-200",
+                    isSelectedNode && nodeSelectionIntent === 'batch' && "border-sky-500 ring-2 ring-sky-200"
                   )}
                 >
                   {node.role === 'assistant' && node.content.trim() === '' ? (

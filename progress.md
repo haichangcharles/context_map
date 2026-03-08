@@ -105,3 +105,48 @@
 |-----------|-------|---------|------------|
 | 2026-03-07 21:12:00 EST | `npm run test:chat-history-sync` failed because recovery ignored stored title | 1 | Expected RED step; implemented title-aware recovery |
 | 2026-03-07 21:14:00 EST | `npm run lint` failed with `body` scope errors in retry branch | 1 | Hoisted `body` variable and reran typecheck successfully |
+
+## Session: 2026-03-08
+
+### Follow-up Feature: Delete selected nodes with preview
+- **Status:** complete
+- **Started:** 2026-03-08 11:20:00 EST
+- Actions taken:
+  - Bootstrapped superpowers and loaded `brainstorming`, `planning-with-files`, `writing-plans`, `test-driven-development`, and `terminal-title`.
+  - Inspected `src/components/ContextMap.tsx`, `src/store.ts`, and scripted tests to locate selection UI and structural history entry points.
+  - Chose a store-first delete implementation so confirmation, preview, placeholder insertion, and undo all operate on the same structural rules.
+  - Added `scripts/test-delete-selected-nodes.ts` and verified RED first on missing `previewDeleteSelectedNodes` export.
+  - Implemented store-level delete preview/commit semantics, including middle-thread splicing, branch-anchor placeholder insertion, and history snapshots that also preserve natural structure baselines.
+  - Replaced the map `Fit` control with a delete workflow that reuses selection logic, paints delete selections red, shows a focused before/after preview, requires confirmation, and reminds the user that Undo restores the last delete.
+- Files created/modified:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+  - `docs/plans/2026-03-08-delete-thread-nodes-design.md`
+  - `src/store.ts`
+  - `src/types.ts`
+  - `src/components/ContextMap.tsx`
+  - `scripts/test-delete-selected-nodes.ts`
+  - `package.json`
+
+## Test Results (2026-03-08)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Delete selection RED | `npm run test:delete-selection` before implementation | Fails because delete preview/action exports do not exist | Failed with missing `previewDeleteSelectedNodes` export as expected | ✓ |
+| Delete selection GREEN | `npm run test:delete-selection` after implementation | Tail delete, middle splice, anchor placeholder, and undo all pass | Passed | ✓ |
+| Mainline regression | `npm run test:mainline` | Existing mainline endpoint semantics remain green | Passed | ✓ |
+| Type check | `npm run lint` | No TS errors | Passed | ✓ |
+
+### Follow-up Fix: Delete preview is now an in-place candidate map
+- **Status:** complete
+- Actions taken:
+  - Reproduced the mismatch where delete preview was only a summary panel while the real map still rendered committed state.
+  - Extended `DeleteSelectionPreview` so store preview output carries a real candidate structure plus node variants for placeholder highlighting.
+  - Updated the map renderer to switch between live state and preview candidate state, so the visible graph itself becomes the delete preview.
+  - Updated rearrange and fit logic to read from the currently rendered structure only, so preview rearrange affects preview and committed rearrange cannot resurrect deleted nodes.
+  - Added regression assertions that committed delete also updates the natural baseline and that `resetStructureToNatural` no longer restores deleted nodes.
+- Files created/modified:
+  - `src/store.ts`
+  - `src/types.ts`
+  - `src/components/ContextMap.tsx`
+  - `scripts/test-delete-selected-nodes.ts`

@@ -5,6 +5,7 @@ import {
   type ChatHistoryRecord,
   type RecoveredChatState,
 } from '../src/services/chatHistory';
+import { mergeRecoveredChatStateIntoStore, useAppStore } from '../src/store';
 import type { Branch, ContextView, Node, Pattern, Project } from '../src/types';
 
 const records: ChatHistoryRecord[] = [
@@ -56,6 +57,18 @@ const records: ChatHistoryRecord[] = [
     message_timestamp: '2026-03-06T10:01:02.000Z',
     captured_at: '2026-03-06T10:01:03.000Z',
   },
+  {
+    message_id: 'context-map-delete:m2',
+    user_id: 'user-1',
+    project_id: 'project-1',
+    project_title: 'Stored Project Title',
+    parent_id: null,
+    branch_id: null,
+    role: 'system',
+    content: '[context-map-delete] m2',
+    message_timestamp: '2026-03-06T10:02:00.000Z',
+    captured_at: '2026-03-06T10:02:01.000Z',
+  },
 ];
 
 const run = () => {
@@ -64,10 +77,12 @@ const run = () => {
   assert.equal(Object.keys(recovered.projects).length, 1);
   assert.equal(recovered.projects['project-1']?.root_node_id, 'm1');
   assert.equal(recovered.projects['project-1']?.title, 'Stored Project Title');
-  assert.deepEqual(recovered.mainlines['project-1'], ['m1', 'm2']);
-  assert.deepEqual(recovered.naturalMainlines['project-1'], ['m1', 'm2']);
+  assert.deepEqual(recovered.mainlines['project-1'], ['m1']);
+  assert.deepEqual(recovered.naturalMainlines['project-1'], ['m1']);
+  assert.deepEqual(recovered.deletedNodeIds, ['m2']);
+  assert.ok(!recovered.nodes['m2'], 'remote tombstone should remove deleted node during reconstruction');
   assert.equal(recovered.nodes['b1']?.branch_id, 'branch-1');
-  assert.equal(recovered.branches['branch-1']?.anchor_node_id, 'm2');
+  assert.equal(recovered.branches['branch-1']?.anchor_node_id, 'm1');
   assert.equal(recovered.branches['branch-1']?.parent_branch_id, null);
 
   const contextId = recovered.projects['project-1']?.active_context_id as string;
@@ -96,6 +111,7 @@ const run = () => {
       futureStructureSnapshots: [],
       naturalMainlines: {},
       naturalBranches: {},
+      deletedNodeIds: [],
       activeProjectId: null,
     },
     recovered
@@ -103,9 +119,25 @@ const run = () => {
 
   assert.equal(merged.projects['project-1']?.title, 'Local title wins');
   assert.equal(merged.nodes['m1']?.content, 'Local content wins');
-  assert.equal(merged.nodes['m2']?.content, 'Mainline answer');
-  assert.equal(merged.branches['branch-1']?.anchor_node_id, 'm2');
-  assert.deepEqual(merged.mainlines['project-1'], ['m1', 'm2']);
+  assert.equal(merged.nodes['m2'], undefined);
+  assert.equal(merged.branches['branch-1']?.anchor_node_id, 'm1');
+  assert.deepEqual(merged.mainlines['project-1'], ['m1']);
+
+  useAppStore.setState(useAppStore.getInitialState(), true);
+  useAppStore.setState({
+    deletedNodeIds: ['m2'],
+  });
+  mergeRecoveredChatStateIntoStore(recovered);
+  const mergedIntoStore = useAppStore.getState();
+  assert.ok(!mergedIntoStore.nodes['m2'], 'store merge should not resurrect locally deleted nodes from remote history');
+  assert.ok(!(mergedIntoStore.mainlines['project-1'] || []).includes('m2'), 'filtered remote merge should not put deleted nodes back into mainline');
+  assert.deepEqual(mergedIntoStore.deletedNodeIds, ['m2'], 'deleted tombstones should remain after remote merge');
+
+  useAppStore.setState(useAppStore.getInitialState(), true);
+  mergeRecoveredChatStateIntoStore(recovered);
+  const remoteDeletionMerged = useAppStore.getState();
+  assert.ok(!remoteDeletionMerged.nodes['m2'], 'remote tombstones should prevent deleted nodes from being restored into a fresh store');
+  assert.deepEqual(remoteDeletionMerged.deletedNodeIds, ['m2'], 'remote tombstones should hydrate deleted ids into store state');
 
   const fallbackRecovered = reconstructChatStateFromRecords([
     {

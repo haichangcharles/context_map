@@ -48,3 +48,13 @@
 - Recovery can preserve the true title if chat-history rows carry `project_title`; using the latest non-empty title per project is the safest merge rule when titles may be renamed later.
 - Adding `project_title` to outgoing rows would break older Supabase tables unless the client either coordinates a migration or retries without that field; the implementation now performs that downgrade automatically.
 - Legacy remote rows created before this change still cannot recover exact historical titles unless those rows are re-synced with `project_title` present.
+
+## New Findings: Delete Workflow
+- `ContextMap.tsx` already has a reusable selection mode with a floating action bar and node-level selected styling.
+- Structural rewrites already flow through `pastStructureSnapshots` / `futureStructureSnapshots`, so delete should be modeled as another structural edit rather than a UI-only mutation.
+- The current graph model is a rooted tree over `parent_id`, with `branch.anchor_node_id` introducing view-level splice points; deleting an interior node requires reparenting surviving children or introducing a synthetic placeholder to avoid disconnecting branches.
+- `undoStructureChange()` already gives a viable "undo last delete" path as long as delete snapshots are taken in the store action.
+- `StructureSnapshot` needed to grow to include `naturalMainlines` and `naturalBranches`; otherwise delete would leave reset-to-natural and undo with stale references to removed nodes.
+- A focused before/after preview can stay lightweight: a compact simulated graph of the impacted local segment is enough for confirmation without trying to re-render the full React Flow canvas inside the modal.
+- The stronger product requirement turned out to be stricter than that: preview must render the actual candidate context-map structure in-place, not a summary card. That means the map renderer needs a switchable data source (`live` vs `candidate preview`) rather than a separate preview widget.
+- `rearrange` was not supposed to restore data, but it was still coupled to whichever structure the main renderer last considered authoritative. The fix is to make layout read from the currently rendered structure only, while delete commit updates both the committed structure and the natural baseline.
