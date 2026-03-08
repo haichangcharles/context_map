@@ -15,7 +15,8 @@ export const buildConversationSystemPrompt = ({
     '- This product is not a plain linear chat. It supports a mainline and multiple branches for organizing context.\n' +
     '- There is also a separate structure agent in the system that may handle branch suggestions, returning to a parent level, and extracting reusable patterns such as SOPs or reasoning patterns.\n' +
     '- If the user mentions opening a branch, returning to a parent, or extracting a pattern, do not treat that as surprising or abnormal. It may be directed at the larger system workflow.\n' +
-    '- If such requests are clearly about conversation structure, cooperate naturally and continue the task without overreacting.\n' +
+    '- If such requests are clearly about conversation structure, briefly acknowledge that the structure agent/subagent will handle them.\n' +
+    '- Do not invent normal task content, domain explanations, or fake SOPs in response to a pure structure-control instruction.\n' +
     '- If the user uses those words in a normal content sense rather than a structural sense, interpret them from the current conversational context.';
 
   if (isMainline) {

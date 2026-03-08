@@ -18,96 +18,11 @@ type ProviderOverride = 'gemini';
 
 const JSON_OBJECT_RESPONSE_FORMAT: JsonObjectResponseFormat = { type: 'json_object' };
 
-const RETURN_PARENT_PATTERNS = [
-  /返回上[一1]级/u,
-  /返回上一个级别/u,
-  /返回上一层/u,
-  /回到上[一1]级/u,
-  /回到上一个级别/u,
-  /回到上一层/u,
-  /返回父级/u,
-  /回到父级/u,
-  /return to parent/i,
-  /go back(?: to parent)?/i,
-  /back to parent/i,
-];
-
-const BRANCH_PATTERNS = [
-  /开(?:一)?个?新?分支/u,
-  /开(?:一)?个?\s*branch/iu,
-  /开branch/iu,
-  /新建分支/u,
-  /需要分支/u,
-  /要开分支/u,
-  /我要开分支/u,
-  /我要开\s*branch/iu,
-  /需要开\s*branch/iu,
-  /单独开一个branch/i,
-  /open a new branch/i,
-  /start a branch/i,
-  /primary action(?:为|是)? ?branch/i,
-];
-
-const EXTRACT_SOP_PATTERNS = [
-  /抽(?:取|象|出).{0,8}(?:sop|流程|标准流程|操作流程)/iu,
-  /提取.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
-  /总结.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
-  /整理.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
-  /抽\s*sop/iu,
-  /沉淀.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
-  /提炼.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
-  /extract.{0,8}(?:sop|workflow|procedure)/i,
-];
-
-const EXTRACT_REASONING_PATTERNS = [
-  /抽(?:取|象|出).{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
-  /提取.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
-  /总结.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
-  /整理.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
-  /沉淀.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
-  /提炼.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
-  /extract.{0,8}(?:reasoning|thinking pattern)/i,
-];
-
 const mapNodesToMessages = (contextNodes: Node[]): AnthropicMessage[] =>
   contextNodes.map(node => ({
     role: node.role === 'assistant' ? 'assistant' : 'user',
     content: node.content,
   }));
-
-const matchesAnyPattern = (text: string, patterns: RegExp[]) => patterns.some((pattern) => pattern.test(text));
-
-const detectExplicitStructureIntent = (
-  userMessage: string,
-  detectionContext?: { currentMode?: 'mainline' | 'branch' }
-): StructureSuggestionDecision | null => {
-  const normalized = userMessage.trim();
-  if (!normalized) return null;
-
-  const wantsReturn = detectionContext?.currentMode === 'branch' && matchesAnyPattern(normalized, RETURN_PARENT_PATTERNS);
-  const wantsBranch = matchesAnyPattern(normalized, BRANCH_PATTERNS);
-  const wantsTaskSop = matchesAnyPattern(normalized, EXTRACT_SOP_PATTERNS);
-  const wantsReasoning = matchesAnyPattern(normalized, EXTRACT_REASONING_PATTERNS);
-
-  if (!wantsReturn && !wantsBranch && !wantsTaskSop && !wantsReasoning) return null;
-
-  return {
-    primaryAction: wantsReturn ? 'return_parent' : wantsBranch ? 'branch' : 'continue',
-    assetAction: wantsTaskSop ? 'extract_task_sop' : wantsReasoning ? 'extract_reasoning' : 'none',
-    confidence: 0.98,
-    reason: wantsReturn
-      ? 'The user explicitly asked to return to the parent level.'
-      : wantsBranch
-        ? 'The user explicitly asked to open a branch.'
-        : 'The user explicitly asked to extract a reusable asset.',
-    assetReason: wantsTaskSop
-      ? 'The user explicitly asked to extract a task SOP.'
-      : wantsReasoning
-        ? 'The user explicitly asked to extract a reasoning pattern.'
-        : '',
-    showSuggestion: true,
-  };
-};
 
 const callOpenAICompat = async (
   system: string,
@@ -592,11 +507,6 @@ export const detectStructureSuggestion = async (
     recentBranchIntents?: string[];
   }
 ): Promise<StructureSuggestionDecision> => {
-  const explicitIntent = detectExplicitStructureIntent(userMessage, detectionContext);
-  if (explicitIntent) {
-    return explicitIntent;
-  }
-
   const messages = mapNodesToMessages(linearContextNodes);
   messages.push({
     role: 'user',

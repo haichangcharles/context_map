@@ -1320,7 +1320,7 @@ export default function ContextMap() {
           <button
             onClick={handleToggleSelectionMode}
             className={clsx(
-              "min-w-0 shrink basis-0 text-xs px-2.5 py-2 rounded-xl border transition-all flex items-center justify-center gap-1.5",
+              "min-w-0 flex-1 overflow-hidden text-xs px-2.5 py-2 rounded-xl border transition-all flex items-center justify-center gap-1.5",
               isSelectionMode
                 ? `${SELECTION_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(39,39,42,0.18)]`
                 : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
@@ -1328,13 +1328,13 @@ export default function ContextMap() {
             title={isSelectionMode ? 'Finish node selection mode' : 'Start selecting nodes for batch actions'}
           >
             {isSelectionMode ? <X size={13} className="!text-white" /> : <Sparkles size={13} className="text-inherit" />}
-            <span className={clsx(isSelectionMode && "!text-white")}>
+            <span className={clsx("truncate", isSelectionMode && "!text-white")}>
               {isSelectionMode ? 'Finish' : 'Selection'}
             </span>
           </button>
           <button
             onClick={handleRearrangeAndCenter}
-            className="min-w-0 shrink basis-0 text-xs text-zinc-600 px-2.5 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center justify-center gap-1"
+            className="min-w-0 flex-1 overflow-hidden text-xs text-zinc-600 px-2.5 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center justify-center gap-1"
             title="Rearrange and center mainline"
           >
             <WandSparkles size={13} />

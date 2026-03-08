@@ -28,6 +28,14 @@ const run = () => {
     mainlinePrompt,
     /If the user mentions opening a branch, returning to a parent, or extracting a pattern/i
   );
+  assert.match(
+    mainlinePrompt,
+    /briefly acknowledge that the structure agent\/subagent will handle them/i
+  );
+  assert.match(
+    mainlinePrompt,
+    /Do not invent normal task content, domain explanations, or fake SOPs/i
+  );
 
   const branchPrompt = buildConversationSystemPrompt({
     isMainline: false,
