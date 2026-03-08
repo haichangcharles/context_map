@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Node, PatternType } from '../types';
 import { BranchSuggestionDecision, parseBranchSuggestionDecision } from '../utils/branchSuggestion';
+import { StructureSuggestionDecision, parseStructureSuggestionDecision } from '../utils/structureSuggestion';
 import { appendDeltaWithinLimit } from './streamLimit';
 import { getModelProviderPreference, getOpenAIModelOverride } from './modelProvider';
 
@@ -484,6 +485,78 @@ export const detectBranchSuggestion = async (
       shouldBranch: false,
       confidence: 0,
       reason: '',
+    };
+  }
+};
+
+export const detectStructureSuggestion = async (
+  linearContextNodes: Node[],
+  userMessage: string,
+  detectionContext?: {
+    currentMode: 'mainline' | 'branch';
+    branchDepth: number;
+    currentBranchIntent?: string;
+    parentContextTLDR?: string;
+    mainlineTLDR?: string;
+    totalBranchCount?: number;
+    activeBranchCount?: number;
+    recentBranchIntents?: string[];
+  }
+): Promise<StructureSuggestionDecision> => {
+  const messages = mapNodesToMessages(linearContextNodes);
+  messages.push({
+    role: 'user',
+    content: userMessage,
+  });
+
+  const contextLines = [
+    `Current mode: ${detectionContext?.currentMode || 'mainline'}.`,
+    `Branch depth: ${detectionContext?.branchDepth ?? 0}.`,
+    detectionContext?.currentBranchIntent
+      ? `Current branch intent: ${detectionContext.currentBranchIntent}`
+      : '',
+    detectionContext?.parentContextTLDR ? `Parent context TLDR: ${detectionContext.parentContextTLDR}` : '',
+    detectionContext?.mainlineTLDR ? `Mainline TLDR: ${detectionContext.mainlineTLDR}` : '',
+    typeof detectionContext?.totalBranchCount === 'number'
+      ? `Total branches in project: ${detectionContext.totalBranchCount}.`
+      : '',
+    typeof detectionContext?.activeBranchCount === 'number'
+      ? `Active branches: ${detectionContext.activeBranchCount}.`
+      : '',
+    detectionContext?.recentBranchIntents?.length
+      ? `Recent branch intents: ${detectionContext.recentBranchIntents.join(' || ')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const systemPrompt =
+    'You are a structure agent for long-horizon LLM conversations. ' +
+    'Decide the single best primary structural action after the latest user message. ' +
+    'Valid primary_action values are: continue, branch, return_parent. ' +
+    'Also decide whether there is enough reusable value to extract an asset now. ' +
+    'Valid asset_action values are: none, extract_reasoning, extract_task_sop, extract_context_case. ' +
+    'Use continue as the default when no intervention is clearly helpful. ' +
+    'Only choose return_parent when the current branch appears to have produced a sufficient intermediate result and should likely stop expanding. ' +
+    'Only choose branch when the latest message is better handled as a side path than in the current thread. ' +
+    'Only choose an extract_* asset action when the conversation has already produced reusable structure, not just partial discussion. ' +
+    'show_suggestion should be true only if a lightweight suggestion is worth showing to the user right now; otherwise false. ' +
+    (contextLines ? `\n\nExecution context:\n${contextLines}\n` : '') +
+    'Return strict JSON only with shape: ' +
+    '{"primary_action":"continue|branch|return_parent","asset_action":"none|extract_reasoning|extract_task_sop|extract_context_case","confidence":number,"reason":"short reason","asset_reason":"short reason","show_suggestion":boolean}. ' +
+    'Set confidence in [0,1].';
+
+  try {
+    const result = await callOpenAICompat(systemPrompt, messages, { type: 'json_object' });
+    return parseStructureSuggestionDecision(result);
+  } catch {
+    return {
+      primaryAction: 'continue',
+      assetAction: 'none',
+      confidence: 0,
+      reason: '',
+      assetReason: '',
+      showSuggestion: false,
     };
   }
 };

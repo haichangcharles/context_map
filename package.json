@@ -16,7 +16,8 @@
     "test:stream-truncation": "tsx scripts/test-stream-truncation.ts",
     "test:pattern-sync": "tsx scripts/test-pattern-sync.ts",
     "test:chat-history-sync": "tsx scripts/test-chat-history-sync.ts",
-    "test:pattern-extraction": "tsx scripts/test-pattern-extraction.ts"
+    "test:pattern-extraction": "tsx scripts/test-pattern-extraction.ts",
+    "test:structure-suggestion": "tsx scripts/test-structure-suggestion.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
