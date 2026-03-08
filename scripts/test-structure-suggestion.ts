@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { detectStructureSuggestion } from '../src/services/gemini';
 import { parseStructureSuggestionDecision } from '../src/utils/structureSuggestion';
 
-const run = () => {
+const run = async () => {
   const parsed = parseStructureSuggestionDecision(
     JSON.stringify({
       primary_action: 'return_parent',
@@ -23,7 +24,58 @@ const run = () => {
   assert.equal(fallback.assetAction, 'none');
   assert.equal(fallback.showSuggestion, false);
 
+  const originalFetch = globalThis.fetch;
+  let capturedHeaders: Record<string, string> = {};
+  let capturedBody: any = null;
+
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+    capturedBody = JSON.parse(String(init?.body || '{}'));
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                primary_action: 'branch',
+                asset_action: 'extract_task_sop',
+                confidence: 0.82,
+                reason: 'A side task should branch.',
+                asset_reason: 'Workflow is reusable.',
+                show_suggestion: true,
+              }),
+            },
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }
+    );
+  }) as typeof globalThis.fetch;
+
+  globalThis.fetch = mockFetch;
+
+  try {
+    const decision = await detectStructureSuggestion([], 'Compare analytics pricing before finalizing the memo.', {
+      currentMode: 'mainline',
+      branchDepth: 0,
+      currentBranchIntent: 'Launch recommendation memo',
+    });
+
+    assert.equal(capturedHeaders['x-model-provider'], 'gemini');
+    assert.equal(capturedBody.response_format.type, 'json_schema');
+    assert.equal(capturedBody.response_format.json_schema.type, 'object');
+    assert.equal(decision.primaryAction, 'branch');
+    assert.equal(decision.assetAction, 'extract_task_sop');
+    assert.equal(decision.showSuggestion, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
   console.log('Structure suggestion tests passed.');
 };
 
-run();
+await run();

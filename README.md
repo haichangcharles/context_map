@@ -73,7 +73,12 @@ OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.siliconflow.cn/v1
 OPENAI_MODEL=deepseek-ai/DeepSeek-V3.2
 
-# Optional default provider (auto/siliconflow/openai)
+# Optional Gemini provider (currently used by the structure suggestion agent)
+GEMINI_API_KEY=...
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_MODEL=gemini-3-flash-preview
+
+# Optional default provider (auto/siliconflow/openai/gemini)
 DEFAULT_MODEL_PROVIDER=auto
 
 # Optional search provider
@@ -88,6 +93,7 @@ Notes:
 - In `auto` mode, the app checks `SILICONFLOW_API_KEY` first, then falls back to `OPENAI_API_KEY`
 - You can switch provider at runtime in `/manage` (Auto / SiliconFlow / OpenAI)
 - You can set OpenAI model override at runtime in `/manage` (stored in browser localStorage)
+- Structure suggestions use `GEMINI_API_KEY` / `GEMINI_MODEL` when available, without changing the main chat provider
 - Model API keys are used only in serverless API (`/api/chat/completions`), not exposed in frontend bundle
 - If Supabase env vars are not provided, chat history and patterns are still stored locally and queued for later sync
 - App state (`projects/nodes/branches/context/patterns`) is persisted in browser `localStorage` (`context-map.app-state.v1`)

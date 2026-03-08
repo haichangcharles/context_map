@@ -2,8 +2,7 @@ export type StructurePrimaryAction = 'continue' | 'branch' | 'return_parent';
 export type StructureAssetAction =
   | 'none'
   | 'extract_reasoning'
-  | 'extract_task_sop'
-  | 'extract_context_case';
+  | 'extract_task_sop';
 
 export type StructureSuggestionDecision = {
   primaryAction: StructurePrimaryAction;
@@ -48,8 +47,7 @@ const isPrimaryAction = (value: unknown): value is StructurePrimaryAction =>
 const isAssetAction = (value: unknown): value is StructureAssetAction =>
   value === 'none' ||
   value === 'extract_reasoning' ||
-  value === 'extract_task_sop' ||
-  value === 'extract_context_case';
+  value === 'extract_task_sop';
 
 export const parseStructureSuggestionDecision = (raw: string): StructureSuggestionDecision => {
   const parsed = parseJsonFromText(raw);
