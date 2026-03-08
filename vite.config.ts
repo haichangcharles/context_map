@@ -3,10 +3,13 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
-type ProviderPreference = 'auto' | 'siliconflow' | 'openai';
+type ProviderPreference = 'auto' | 'siliconflow' | 'openai' | 'gemini';
+type OpenAICompatConfig = { provider: 'siliconflow' | 'openai'; apiKey: string; baseUrl: string; model: string };
+type GeminiConfig = { provider: 'gemini'; apiKey: string; baseUrl: string; model: string };
+type ModelConfig = OpenAICompatConfig | GeminiConfig;
 
 const normalizeProviderPreference = (raw: unknown): ProviderPreference => {
-  if (raw === 'siliconflow' || raw === 'openai' || raw === 'auto') return raw;
+  if (raw === 'siliconflow' || raw === 'openai' || raw === 'gemini' || raw === 'auto') return raw;
   return 'auto';
 };
 
@@ -33,14 +36,21 @@ const buildSiliconflowConfig = (env: Record<string, string>) => {
   const apiKey = env.SILICONFLOW_API_KEY || '';
   const baseUrl = (env.SILICONFLOW_BASE_URL || 'https://api.siliconflow.cn/v1').replace(/\/+$/, '');
   const model = env.DEEPSEEK_MODEL || env.OPENAI_MODEL || 'deepseek-ai/DeepSeek-V3.2';
-  return { apiKey, baseUrl, model };
+  return { provider: 'siliconflow' as const, apiKey, baseUrl, model };
 };
 
 const buildOpenAIConfig = (env: Record<string, string>, modelOverride = '') => {
   const apiKey = env.OPENAI_API_KEY || '';
   const baseUrl = (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   const model = modelOverride || env.OPENAI_MODEL || 'gpt-4o-mini';
-  return { apiKey, baseUrl, model };
+  return { provider: 'openai' as const, apiKey, baseUrl, model };
+};
+
+const buildGeminiConfig = (env: Record<string, string>) => {
+  const apiKey = env.GEMINI_API_KEY || '';
+  const baseUrl = (env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+  const model = env.GEMINI_MODEL || 'gemini-3-flash-preview';
+  return { provider: 'gemini' as const, apiKey, baseUrl, model };
 };
 
 const getModelConfig = (
@@ -50,6 +60,7 @@ const getModelConfig = (
 ) => {
   const siliconflow = buildSiliconflowConfig(env);
   const openai = buildOpenAIConfig(env, openAIModelOverride);
+  const gemini = buildGeminiConfig(env);
 
   if (providerPreference === 'siliconflow') {
     if (!siliconflow.apiKey) throw new Error('Missing SILICONFLOW_API_KEY for siliconflow provider.');
@@ -59,10 +70,15 @@ const getModelConfig = (
     if (!openai.apiKey) throw new Error('Missing OPENAI_API_KEY for openai provider.');
     return openai;
   }
+  if (providerPreference === 'gemini') {
+    if (!gemini.apiKey) throw new Error('Missing GEMINI_API_KEY for gemini provider.');
+    return gemini;
+  }
 
   if (siliconflow.apiKey) return siliconflow;
   if (openai.apiKey) return openai;
-  throw new Error('Missing model API key. Set SILICONFLOW_API_KEY or OPENAI_API_KEY.');
+  if (gemini.apiKey) return gemini;
+  throw new Error('Missing model API key. Set SILICONFLOW_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY.');
 };
 
 const sendJson = (res: { statusCode: number; setHeader: (k: string, v: string) => void; end: (s: string) => void }, status: number, body: unknown) => {
@@ -96,6 +112,67 @@ const readJsonBody = async (req: {
   });
 };
 
+const buildGeminiPayload = (env: Record<string, string>, body: Record<string, unknown>, config: GeminiConfig) => {
+  const rawMessages = Array.isArray(body.messages) ? body.messages : [];
+  const messages = rawMessages.filter(
+    (message): message is { role: string; content: string } =>
+      !!message &&
+      typeof message === 'object' &&
+      typeof (message as Record<string, unknown>).role === 'string' &&
+      typeof (message as Record<string, unknown>).content === 'string'
+  );
+
+  const systemMessage = messages.find((message) => message.role === 'system');
+  const contents = messages
+    .filter((message) => message.role !== 'system')
+    .map((message) => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: message.content }],
+    }));
+
+  const responseFormat = body.response_format as
+    | { type?: string; json_schema?: unknown }
+    | undefined;
+  const maxOutputTokens =
+    typeof body.max_completion_tokens === 'number'
+      ? body.max_completion_tokens
+      : typeof body.max_tokens === 'number'
+        ? body.max_tokens
+        : undefined;
+
+  const generationConfig: Record<string, unknown> = {};
+  if (typeof maxOutputTokens === 'number') generationConfig.maxOutputTokens = maxOutputTokens;
+  if (responseFormat?.type === 'json_object') generationConfig.responseMimeType = 'application/json';
+  if (responseFormat?.type === 'json_schema') {
+    generationConfig.responseMimeType = 'application/json';
+    generationConfig.responseJsonSchema = responseFormat.json_schema;
+  }
+
+  return {
+    url: `${config.baseUrl}/models/${config.model}:generateContent`,
+    payload: {
+      ...(systemMessage
+        ? {
+            systemInstruction: {
+              parts: [{ text: systemMessage.content }],
+            },
+          }
+        : {}),
+      contents,
+      ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {}),
+    },
+  };
+};
+
+const extractGeminiText = (data: any): string => {
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return '';
+  return parts
+    .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+    .filter(Boolean)
+    .join('');
+};
+
 const createChatCompletionsDevPlugin = (env: Record<string, string>): Plugin => ({
   name: 'dev-chat-completions-middleware',
   configureServer(server) {
@@ -117,7 +194,7 @@ const createChatCompletionsDevPlugin = (env: Record<string, string>): Plugin => 
 
       const providerPreference = resolveProviderPreference(req, env);
       const openAIModelOverride = resolveOpenAIModelOverride(req);
-      let config: { apiKey: string; baseUrl: string; model: string };
+      let config: ModelConfig;
       try {
         config = getModelConfig(env, providerPreference, openAIModelOverride);
       } catch (error) {
@@ -125,23 +202,69 @@ const createChatCompletionsDevPlugin = (env: Record<string, string>): Plugin => 
         return;
       }
 
-      const upstreamPayload = {
-        model: config.model,
-        ...body,
-      };
-
       let upstream: Response;
       try {
-        upstream = await fetch(`${config.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.apiKey}`,
-          },
-          body: JSON.stringify(upstreamPayload),
-        });
+        if (config.provider === 'gemini') {
+          if (body.stream === true) {
+            sendJson(res, 400, { error: 'Gemini provider does not support streaming in this endpoint.' });
+            return;
+          }
+          const { url, payload } = buildGeminiPayload(env, body, config);
+          upstream = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': config.apiKey,
+            },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          const upstreamPayload = {
+            model: config.model,
+            ...body,
+          };
+
+          upstream = await fetch(`${config.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: JSON.stringify(upstreamPayload),
+          });
+        }
       } catch {
         sendJson(res, 502, { error: 'Upstream request failed' });
+        return;
+      }
+
+      if (config.provider === 'gemini') {
+        if (!upstream.ok) {
+          res.statusCode = upstream.status;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(await upstream.text());
+          return;
+        }
+
+        const data = await upstream.json();
+        const text = extractGeminiText(data);
+        sendJson(res, upstream.status, {
+          id: data?.responseId || null,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: data?.modelVersion || data?.model || 'gemini',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: text,
+              },
+              finish_reason: data?.candidates?.[0]?.finishReason?.toLowerCase?.() || 'stop',
+            },
+          ],
+          usage: data?.usageMetadata || null,
+        });
         return;
       }
 

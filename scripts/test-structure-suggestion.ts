@@ -75,6 +75,48 @@ const run = async () => {
     globalThis.fetch = originalFetch;
   }
 
+  let explicitFetchCalled = false;
+  globalThis.fetch = (async () => {
+    explicitFetchCalled = true;
+    throw new Error('explicit intent path should not hit fetch');
+  }) as typeof globalThis.fetch;
+
+  try {
+    const explicit = await detectStructureSuggestion([], '我需要返回上一个级别，并且帮我抽取 SOP。', {
+      currentMode: 'branch',
+      branchDepth: 1,
+      currentBranchIntent: '整理 launch readiness 流程',
+    });
+
+    assert.equal(explicit.primaryAction, 'return_parent');
+    assert.equal(explicit.assetAction, 'extract_task_sop');
+    assert.equal(explicit.showSuggestion, true);
+    assert.equal(explicitFetchCalled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  explicitFetchCalled = false;
+  globalThis.fetch = (async () => {
+    explicitFetchCalled = true;
+    throw new Error('explicit branch+extract path should not hit fetch');
+  }) as typeof globalThis.fetch;
+
+  try {
+    const explicitBranchExtract = await detectStructureSuggestion([], '请给我开branch，然后总结SOP。', {
+      currentMode: 'mainline',
+      branchDepth: 0,
+      currentBranchIntent: 'context-map MVP',
+    });
+
+    assert.equal(explicitBranchExtract.primaryAction, 'branch');
+    assert.equal(explicitBranchExtract.assetAction, 'extract_task_sop');
+    assert.equal(explicitBranchExtract.showSuggestion, true);
+    assert.equal(explicitFetchCalled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
   console.log('Structure suggestion tests passed.');
 };
 

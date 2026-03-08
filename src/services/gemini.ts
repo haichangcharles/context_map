@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Node, PatternType } from '../types';
 import { BranchSuggestionDecision, parseBranchSuggestionDecision } from '../utils/branchSuggestion';
+import { buildStructureSuggestionSystemPrompt } from '../utils/promptBuilders';
 import { StructureSuggestionDecision, parseStructureSuggestionDecision } from '../utils/structureSuggestion';
 import { appendDeltaWithinLimit } from './streamLimit';
 import { getModelProviderPreference, getOpenAIModelOverride } from './modelProvider';
@@ -17,11 +18,96 @@ type ProviderOverride = 'gemini';
 
 const JSON_OBJECT_RESPONSE_FORMAT: JsonObjectResponseFormat = { type: 'json_object' };
 
+const RETURN_PARENT_PATTERNS = [
+  /返回上[一1]级/u,
+  /返回上一个级别/u,
+  /返回上一层/u,
+  /回到上[一1]级/u,
+  /回到上一个级别/u,
+  /回到上一层/u,
+  /返回父级/u,
+  /回到父级/u,
+  /return to parent/i,
+  /go back(?: to parent)?/i,
+  /back to parent/i,
+];
+
+const BRANCH_PATTERNS = [
+  /开(?:一)?个?新?分支/u,
+  /开(?:一)?个?\s*branch/iu,
+  /开branch/iu,
+  /新建分支/u,
+  /需要分支/u,
+  /要开分支/u,
+  /我要开分支/u,
+  /我要开\s*branch/iu,
+  /需要开\s*branch/iu,
+  /单独开一个branch/i,
+  /open a new branch/i,
+  /start a branch/i,
+  /primary action(?:为|是)? ?branch/i,
+];
+
+const EXTRACT_SOP_PATTERNS = [
+  /抽(?:取|象|出).{0,8}(?:sop|流程|标准流程|操作流程)/iu,
+  /提取.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
+  /总结.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
+  /整理.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
+  /抽\s*sop/iu,
+  /沉淀.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
+  /提炼.{0,8}(?:sop|流程|标准流程|操作流程)/iu,
+  /extract.{0,8}(?:sop|workflow|procedure)/i,
+];
+
+const EXTRACT_REASONING_PATTERNS = [
+  /抽(?:取|象|出).{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
+  /提取.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
+  /总结.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
+  /整理.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
+  /沉淀.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
+  /提炼.{0,8}(?:推理|思维模式|思考模式|reasoning)/iu,
+  /extract.{0,8}(?:reasoning|thinking pattern)/i,
+];
+
 const mapNodesToMessages = (contextNodes: Node[]): AnthropicMessage[] =>
   contextNodes.map(node => ({
     role: node.role === 'assistant' ? 'assistant' : 'user',
     content: node.content,
   }));
+
+const matchesAnyPattern = (text: string, patterns: RegExp[]) => patterns.some((pattern) => pattern.test(text));
+
+const detectExplicitStructureIntent = (
+  userMessage: string,
+  detectionContext?: { currentMode?: 'mainline' | 'branch' }
+): StructureSuggestionDecision | null => {
+  const normalized = userMessage.trim();
+  if (!normalized) return null;
+
+  const wantsReturn = detectionContext?.currentMode === 'branch' && matchesAnyPattern(normalized, RETURN_PARENT_PATTERNS);
+  const wantsBranch = matchesAnyPattern(normalized, BRANCH_PATTERNS);
+  const wantsTaskSop = matchesAnyPattern(normalized, EXTRACT_SOP_PATTERNS);
+  const wantsReasoning = matchesAnyPattern(normalized, EXTRACT_REASONING_PATTERNS);
+
+  if (!wantsReturn && !wantsBranch && !wantsTaskSop && !wantsReasoning) return null;
+
+  return {
+    primaryAction: wantsReturn ? 'return_parent' : wantsBranch ? 'branch' : 'continue',
+    assetAction: wantsTaskSop ? 'extract_task_sop' : wantsReasoning ? 'extract_reasoning' : 'none',
+    confidence: 0.98,
+    reason: wantsReturn
+      ? 'The user explicitly asked to return to the parent level.'
+      : wantsBranch
+        ? 'The user explicitly asked to open a branch.'
+        : 'The user explicitly asked to extract a reusable asset.',
+    assetReason: wantsTaskSop
+      ? 'The user explicitly asked to extract a task SOP.'
+      : wantsReasoning
+        ? 'The user explicitly asked to extract a reasoning pattern.'
+        : '',
+    showSuggestion: true,
+  };
+};
 
 const callOpenAICompat = async (
   system: string,
@@ -506,6 +592,11 @@ export const detectStructureSuggestion = async (
     recentBranchIntents?: string[];
   }
 ): Promise<StructureSuggestionDecision> => {
+  const explicitIntent = detectExplicitStructureIntent(userMessage, detectionContext);
+  if (explicitIntent) {
+    return explicitIntent;
+  }
+
   const messages = mapNodesToMessages(linearContextNodes);
   messages.push({
     role: 'user',
@@ -553,142 +644,7 @@ export const detectStructureSuggestion = async (
     ],
   } as const;
 
-  const systemPrompt = `You are a cautious structure copilot for a structured LLM conversation system.
-
-This system is NOT a traditional linear chat interface.
-Instead, it organizes work through:
-- a mainline that tracks the primary task,
-- and branches that support side explorations, detours, subtasks, comparisons, and temporary investigations.
-
-Your job is to help users manage this structured conversation space with minimal interruption.
-
-You are not here to optimize for structural neatness.
-You are here to support user progress.
-
-A branch is useful when a local exploration should be separated from the current line of work.
-Returning is useful when a branch has already produced enough value and should stop expanding.
-Sometimes a conversation also produces a reusable asset that may help the user in future tasks.
-
-You must make two decisions:
-
-1. A primary structural action:
-- continue
-- branch
-- return_parent
-
-2. An optional asset action:
-- none
-- extract_reasoning
-- extract_task_sop
-
-Your default action is continue.
-
-General principles:
-- Minimize interruption.
-- If there is meaningful uncertainty, choose continue.
-- A missed suggestion is often better than an annoying or premature suggestion.
-- Optimize for the user's progress, not for perfect structure.
-- Do not suggest branching or returning just because the conversation could be reorganized.
-- Only suggest a structural action if it is likely to help the user make better progress right now.
-- Do not suppress genuinely useful interventions.
-- Your goal is not to avoid acting.
-- Your goal is to act only when the structural value is strong enough to justify the interruption.
-
-Think from the user's perspective:
-- Would an interruption feel helpful or premature?
-- Is the user still actively exploring, or have they likely obtained enough value from the current branch for now?
-- Would a structural suggestion reduce confusion, or just add friction?
-- Is the current content likely to matter beyond this exact thread?
-- If you suggested something now, would the user likely feel supported, or distracted?
-
-Primary action guidance:
-
-Choose continue when:
-- the conversation is still actively progressing,
-- the user is still exploring the current branch,
-- there is no strong evidence that a structural transition would help,
-- the branch is still producing meaningful new information,
-- or the evidence is mixed or ambiguous.
-
-Examples of when continue is the best action:
-- The user is still actively exploring the current question and has not yet reached a local conclusion.
-- The conversation is progressing productively without obvious structural confusion.
-- A possible branch or return exists, but the value of intervening is still weak or premature.
-- The content may eventually become a reusable asset, but it is not mature enough yet.
-
-Choose branch only when:
-- the latest user message is better handled as a side path than inside the current thread,
-- it meaningfully diverges from the current branch's local objective,
-- or opening a new branch would likely preserve clarity and reduce future confusion.
-
-Examples of when branch may be the best action:
-- The current thread is focused on solving one main problem, and the user suddenly asks for a temporary side investigation that is useful but not central.
-- The user introduces a distinct subproblem that could generate several follow-up turns and would otherwise clutter the current line of reasoning.
-- The conversation shifts from decision-making into exploratory comparison, brainstorming, or optional what-if analysis that is better isolated.
-- The user asks a question that is related to the broader project, but not to the local objective of the current branch.
-
-Choose return_parent only when:
-- the current branch appears to have produced a sufficient intermediate result,
-- the user seems to be converging rather than continuing open-ended exploration,
-- the branch now feels more like something to integrate than something to further expand,
-- and returning to the parent context would likely help progress.
-
-Do NOT choose return_parent just because the branch is long.
-Do NOT choose return_parent if the user still seems to be actively working through unresolved details.
-
-Examples of when return_parent may be the best action:
-- The branch has produced a usable intermediate answer, recommendation, or comparison, and the next likely step is to integrate it back into the higher-level discussion.
-- The user appears to have reached a local conclusion and is no longer substantially expanding the branch's original question.
-- The branch has shifted from exploration into synthesis, and continuing inside the branch would likely create repetition rather than new value.
-- The user begins to reconnect the branch's result to the broader task, suggesting that this line of inquiry has served its purpose.
-
-Asset extraction guidance:
-- Asset extraction is a LOW-FREQUENCY suggestion.
-- Do not suggest asset extraction casually.
-- Only suggest an asset when the conversation has already produced something likely to be useful beyond the current thread.
-
-Valid asset actions:
-- extract_reasoning: only when the conversation demonstrates a reusable way of thinking, such as a generalizable reasoning pattern, analytical sequence, evaluation logic, or decision process that could apply in many future situations.
-- extract_task_sop: only when the conversation demonstrates a reusable task procedure, such as a relatively standardized workflow, set of steps, checklist, or operating process that a user could likely reuse later in similar tasks.
-- none: use in all other cases.
-
-Examples of when extract_reasoning may be appropriate:
-- The conversation reveals a reusable analytical sequence, such as defining the objective, identifying constraints, comparing alternatives, evaluating tradeoffs, and making a recommendation.
-- The branch demonstrates a generalizable way of framing ambiguous problems that could help in many future tasks.
-- The value lies mainly in how the reasoning was performed, not in the specific domain facts being discussed.
-
-Examples of when extract_task_sop may be appropriate:
-- The conversation converges on a repeatable workflow with stable steps, such as preparing a brief, reviewing a design, writing a structured update, or evaluating readiness.
-- The output can plausibly help the user in future similar tasks, not just in the current project.
-- The procedure is specific enough to execute, but general enough to reuse.
-
-Additional asset constraints:
-- Asset extraction is more conservative than branching or returning.
-- Do not suggest asset extraction for partial, messy, speculative, or still-evolving discussion.
-- Do not suggest asset extraction merely because the conversation contains a good summary.
-- A useful summary of the current thread is NOT automatically a reusable asset.
-- Only reusable structure qualifies as an asset.
-
-To judge asset value, ask:
-- Will the user likely encounter similar tasks again?
-- Could this way of thinking be reused in other contexts?
-- Has the conversation already produced something standardized enough to be reusable?
-- Would the user likely feel this is a valuable reusable asset, rather than just a nice summary of the current discussion?
-
-Confidence and display policy:
-- show_suggestion should be true only when the suggestion is likely useful, the confidence is reasonably strong, and the intervention would probably feel timely rather than disruptive.
-- If the decision is weak, uncertain, or low-value, set show_suggestion to false.${contextLines ? `\n\nExecution context:\n${contextLines}\n` : ''}
-
-Return strict JSON only with this shape:
-{"primary_action":"continue|branch|return_parent","asset_action":"none|extract_reasoning|extract_task_sop","confidence":number,"reason":"short reason","asset_reason":"short reason","show_suggestion":boolean}
-
-Additional requirements:
-- confidence must be in [0,1]
-- reason should briefly explain the primary action
-- asset_reason should briefly explain the asset decision, or be an empty string if asset_action is none
-- Be conservative
-- Prefer continue over weak intervention
-- Prefer none over weak asset extraction`;
+  const systemPrompt = buildStructureSuggestionSystemPrompt(contextLines);
 
   try {
     const result = await callOpenAICompat(
@@ -698,7 +654,14 @@ Additional requirements:
       'gemini'
     );
     return parseStructureSuggestionDecision(result);
-  } catch {
+  } catch (error) {
+    console.error('[structure-agent] detection failed', {
+      error: error instanceof Error ? error.message : String(error),
+      currentMode: detectionContext?.currentMode || 'mainline',
+      branchDepth: detectionContext?.branchDepth ?? 0,
+      userMessage,
+      contextNodeCount: linearContextNodes.length,
+    });
     return {
       primaryAction: 'continue',
       assetAction: 'none',

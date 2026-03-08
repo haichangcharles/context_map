@@ -18,7 +18,9 @@
     "test:chat-history-sync": "tsx scripts/test-chat-history-sync.ts",
     "test:pattern-extraction": "tsx scripts/test-pattern-extraction.ts",
     "test:structure-suggestion": "tsx scripts/test-structure-suggestion.ts",
-    "test:gemini-provider": "tsx scripts/test-gemini-provider.ts"
+    "test:gemini-provider": "tsx scripts/test-gemini-provider.ts",
+    "test:structure-prompts": "tsx scripts/test-structure-prompts.ts",
+    "test:inline-suggestions": "tsx scripts/test-inline-suggestions.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

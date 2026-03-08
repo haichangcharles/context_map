@@ -4,15 +4,20 @@ import { Node, Branch, Pattern, PatternType } from '../types';
 import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Square, X, Check, TriangleAlert, ChevronLeft, ChevronRight, Rows3 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
-import { detectStructureSuggestion, extractPatternByType, generateResponseStream, generateMainlineSummary, detectBranchSuggestion } from '../services/gemini';
+import { detectStructureSuggestion, extractPatternByType, generateResponseStream, generateMainlineSummary } from '../services/gemini';
 import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { flushChatHistoryQueue, logChatNode } from '../services/chatHistory';
+import { buildInlineSuggestions, clampInlineSuggestionIndex } from '../utils/inlineSuggestions';
+import { buildConversationSystemPrompt } from '../utils/promptBuilders';
 
 type PendingBranchSuggestion = {
   anchorNodeId: string;
   reason: string;
   nodeIdsToMove: string[];
   originBasePath: string;
+  assetAction?: 'none' | 'extract_reasoning' | 'extract_task_sop';
+  assetReason?: string;
+  sourceNodeIds?: string[];
 };
 
 type InlineNotice = {
@@ -223,6 +228,8 @@ export default function ConversationStream() {
   const [inlineNotice, setInlineNotice] = useState<InlineNotice | null>(null);
   const [isPatternLibraryOpen, setIsPatternLibraryOpen] = useState(false);
   const [patternPage, setPatternPage] = useState(0);
+  const [structureActionInFlight, setStructureActionInFlight] = useState<'return' | 'extract' | null>(null);
+  const [activeInlineSuggestionIndex, setActiveInlineSuggestionIndex] = useState(0);
 
   const handleTruncateOutput = () => {
     if (!isLoading) return;
@@ -302,6 +309,10 @@ export default function ConversationStream() {
       setPendingStructureSuggestion(null);
     }
   }, [context?.base_path, pendingStructureSuggestion]);
+
+  useEffect(() => {
+    setActiveInlineSuggestionIndex(0);
+  }, [pendingBranchSuggestion, pendingStructureSuggestion]);
 
   useEffect(() => {
     if (!branchSuggestionNotice) return;
@@ -572,23 +583,24 @@ export default function ConversationStream() {
       isAtBranchFirstNode,
     });
 
-    const branchDetectionPromise = shouldDetectBranch
-      ? detectBranchSuggestion(liveVisibleNodes, userMsg, {
-          currentMode: liveIsMainline ? 'mainline' : 'branch',
-          branchDepth: liveBranchDepth,
-          currentBranchIntent,
-          parentContextTLDR,
-          mainlineTLDR,
-          totalBranchCount,
-          activeBranchCount,
-          recentBranchIntents,
-        })
-      : Promise.resolve(null);
+    // Legacy branch-only agent kept here for quick rollback if needed.
+    // const branchDetectionPromise = shouldDetectBranch
+    //   ? detectBranchSuggestion(liveVisibleNodes, userMsg, {
+    //       currentMode: liveIsMainline ? 'mainline' : 'branch',
+    //       branchDepth: liveBranchDepth,
+    //       currentBranchIntent,
+    //       parentContextTLDR,
+    //       mainlineTLDR,
+    //       totalBranchCount,
+    //       activeBranchCount,
+    //       recentBranchIntents,
+    //     })
+    //   : Promise.resolve(null);
 
     const structureDetectionPromise =
-      !liveIsMainline && parentId
+      shouldDetectBranch && parentId
         ? detectStructureSuggestion(liveVisibleNodes, userMsg, {
-            currentMode: 'branch',
+            currentMode: liveIsMainline ? 'mainline' : 'branch',
             branchDepth: liveBranchDepth,
             currentBranchIntent,
             parentContextTLDR,
@@ -630,13 +642,11 @@ export default function ConversationStream() {
     };
 
     try {
-      let systemPrompt = "You are assisting in a structured conversational computation. Main Objective: Help the user.";
-      if (!isMainline && currentBranch) {
-        systemPrompt = `You are executing a Subtask branch. Branched from node ${currentBranch.anchor_node_id}.`;
-        if (currentBranch.mainline_summary) {
-          systemPrompt += `\n\n[CURRENT CONTEXT STATUS]:\n- Main Task Summary: ${currentBranch.mainline_summary}\n- Current State: You are currently executing a Subtask branch.`;
-        }
-      }
+      const systemPrompt = buildConversationSystemPrompt({
+        isMainline,
+        branchAnchorNodeId: currentBranch?.anchor_node_id || null,
+        mainlineSummary: currentBranch?.mainline_summary || '',
+      });
       
       const responseText = await generateResponseStream(
         systemPrompt,
@@ -683,18 +693,18 @@ export default function ConversationStream() {
       if (persistedAssistantNode) {
         void logChatNode(persistedAssistantNode, { projectTitle: project.title });
       }
-      const [branchDecision, structureDecision] = await Promise.all([
-        branchDetectionPromise,
-        structureDetectionPromise,
-      ]);
-      logBranchDebug('branch-decision', {
-        shouldBranch: branchDecision?.shouldBranch ?? false,
-        confidence: branchDecision?.confidence ?? 0,
-        reason: branchDecision?.reason ?? '',
+      const structureDecision = await structureDetectionPromise;
+      logBranchDebug('structure-decision', {
+        primaryAction: structureDecision?.primaryAction ?? 'continue',
+        assetAction: structureDecision?.assetAction ?? 'none',
+        confidence: structureDecision?.confidence ?? 0,
+        reason: structureDecision?.reason ?? '',
+        assetReason: structureDecision?.assetReason ?? '',
+        showSuggestion: structureDecision?.showSuggestion ?? false,
         basePath: liveContext?.base_path ?? 'unknown',
         parentId,
       });
-      if (branchDecision?.shouldBranch && parentId) {
+      if (structureDecision?.showSuggestion && structureDecision.primaryAction === 'branch' && parentId) {
         const state = useAppStore.getState();
         const activeContextId = state.projects[project.project_id]?.active_context_id;
         const activeContext = activeContextId ? state.contexts[activeContextId] : null;
@@ -702,15 +712,18 @@ export default function ConversationStream() {
           logBranchDebug('suggestion-pre-snapshot', buildSuggestionSnapshot());
           setPendingBranchSuggestion({
             anchorNodeId: parentId,
-            reason: branchDecision.reason || 'This looks like a temporary or off-topic subtask.',
+            reason: structureDecision.reason || 'This looks like a temporary or off-topic subtask.',
             nodeIdsToMove: [userNodeId, assistantNodeId],
             originBasePath: activeContext.base_path,
+            assetAction: structureDecision.assetAction,
+            assetReason: structureDecision.assetReason,
+            sourceNodeIds: liveVisibleNodes.map((node) => node.node_id).concat([userNodeId, assistantNodeId]),
           });
           logBranchDebug('suggestion-created', {
             anchorNodeId: parentId,
             originBasePath: activeContext.base_path,
             nodeIdsToMove: [userNodeId, assistantNodeId],
-            reason: branchDecision.reason || '',
+            reason: structureDecision.reason || '',
           });
           logBranchDebug('suggestion-post-snapshot', buildSuggestionSnapshot());
         }
@@ -720,6 +733,7 @@ export default function ConversationStream() {
         structureDecision?.showSuggestion &&
         parentId &&
         liveContext &&
+        structureDecision.primaryAction !== 'branch' &&
         (structureDecision.primaryAction === 'return_parent' || structureDecision.assetAction !== 'none')
       ) {
         const state = useAppStore.getState();
@@ -838,6 +852,19 @@ export default function ConversationStream() {
       setBranchSuggestionNotice('Branch suggestion is stale. Please regenerate.');
     } else {
       setPendingBranchFeedback(createdBranchId, acceptSample);
+      if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none') {
+        setPendingStructureSuggestion({
+          targetNodeId: assistantNodeId,
+          originBasePath: createdBranchId,
+          primaryAction: 'continue',
+          assetAction: pendingBranchSuggestion.assetAction,
+          reason: '',
+          assetReason: pendingBranchSuggestion.assetReason || '',
+          sourceNodeIds:
+            pendingBranchSuggestion.sourceNodeIds ||
+            [userNodeId, assistantNodeId],
+        });
+      }
     }
     setPendingBranchSuggestion(null);
   };
@@ -870,37 +897,29 @@ export default function ConversationStream() {
   };
 
   const handleDismissStructureSuggestion = () => {
+    if (structureActionInFlight) return;
     setPendingStructureSuggestion(null);
   };
 
-  const handleAcceptReturnSuggestion = () => {
-    if (!pendingStructureSuggestion || pendingStructureSuggestion.primaryAction !== 'return_parent') return;
-    returnToParentBranch(project.project_id);
-    setPendingStructureSuggestion((current) =>
-      current
-        ? {
-            ...current,
-            primaryAction: 'continue',
-            reason: '',
-          }
-        : current
-    );
-  };
-
-  const handleAcceptExtractSuggestion = async () => {
-    if (!pendingStructureSuggestion || pendingStructureSuggestion.assetAction === 'none') return;
-    const selectedNodes = pendingStructureSuggestion.sourceNodeIds
+  const extractSuggestedPattern = async (
+    assetAction: 'extract_reasoning' | 'extract_task_sop',
+    sourceNodeIds: string[],
+    preserveReturnAction = false
+  ) => {
+    setStructureActionInFlight('extract');
+    const selectedNodes = sourceNodeIds
       .map((nodeId) => nodes[nodeId])
       .filter((node): node is Node => !!node)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     if (selectedNodes.length === 0) {
       setPendingStructureSuggestion(null);
+      setPendingBranchSuggestion(null);
+      setStructureActionInFlight(null);
       return;
     }
 
     try {
-      const patternType: PatternType =
-        pendingStructureSuggestion.assetAction === 'extract_reasoning' ? 'reasoning' : 'task_sop';
+      const patternType: PatternType = assetAction === 'extract_reasoning' ? 'reasoning' : 'task_sop';
       const extracted = await extractPatternByType(selectedNodes, patternType);
       createPattern({
         type: patternType,
@@ -919,14 +938,25 @@ export default function ConversationStream() {
           ? 'The suggested pattern was saved as a draft and still needs review before enablement.'
           : 'The suggested pattern was saved and is ready in the pattern library.',
       });
+      setPendingBranchSuggestion((current) =>
+        current
+          ? {
+              ...current,
+              assetAction: 'none',
+              assetReason: '',
+            }
+          : current
+      );
       setPendingStructureSuggestion((current) => {
         if (!current) return current;
-        if (current.primaryAction !== 'return_parent') return null;
-        return {
-          ...current,
-          assetAction: 'none',
-          assetReason: '',
-        };
+        if (preserveReturnAction && current.primaryAction === 'return_parent') {
+          return {
+            ...current,
+            assetAction: 'none',
+            assetReason: '',
+          };
+        }
+        return null;
       });
     } catch (error) {
       console.error(error);
@@ -936,7 +966,80 @@ export default function ConversationStream() {
         message: 'The suggested pattern could not be extracted from this thread.',
       });
       setPendingStructureSuggestion(null);
+      setPendingBranchSuggestion(null);
+    } finally {
+      setStructureActionInFlight(null);
     }
+  };
+
+  const handleAcceptReturnSuggestion = () => {
+    if (
+      structureActionInFlight ||
+      !pendingStructureSuggestion ||
+      pendingStructureSuggestion.primaryAction !== 'return_parent'
+    ) {
+      return;
+    }
+
+    setStructureActionInFlight('return');
+    try {
+      returnToParentBranch(project.project_id);
+      setPendingStructureSuggestion((current) =>
+        current
+          ? {
+              ...current,
+              primaryAction: 'continue',
+              reason: '',
+            }
+          : current
+      );
+    } finally {
+      setStructureActionInFlight(null);
+    }
+  };
+
+  const handleAcceptExtractSuggestion = async () => {
+    if (
+      structureActionInFlight ||
+      !pendingStructureSuggestion ||
+      pendingStructureSuggestion.assetAction === 'none'
+    ) {
+      return;
+    }
+
+    await extractSuggestedPattern(
+      pendingStructureSuggestion.assetAction,
+      pendingStructureSuggestion.sourceNodeIds,
+      pendingStructureSuggestion.primaryAction === 'return_parent'
+    );
+  };
+
+  const handleAcceptBranchExtractSuggestion = async () => {
+    if (
+      structureActionInFlight ||
+      !pendingBranchSuggestion ||
+      !pendingBranchSuggestion.sourceNodeIds ||
+      pendingBranchSuggestion.assetAction === 'none' ||
+      !pendingBranchSuggestion.assetAction
+    ) {
+      return;
+    }
+
+    await extractSuggestedPattern(pendingBranchSuggestion.assetAction, pendingBranchSuggestion.sourceNodeIds);
+  };
+
+  const goToPreviousInlineSuggestion = (itemCount: number) => {
+    setActiveInlineSuggestionIndex((current) => {
+      if (itemCount <= 1) return 0;
+      return current <= 0 ? itemCount - 1 : current - 1;
+    });
+  };
+
+  const goToNextInlineSuggestion = (itemCount: number) => {
+    setActiveInlineSuggestionIndex((current) => {
+      if (itemCount <= 1) return 0;
+      return current >= itemCount - 1 ? 0 : current + 1;
+    });
   };
 
   const handleTogglePatternEnabled = (pattern: Pattern) => {
@@ -1149,14 +1252,40 @@ export default function ConversationStream() {
           visibleNodes.map((node) => {
             const isExcluded = context.excluded_nodes.includes(node.node_id);
             const inlineSuggestionTargetNodeId = pendingBranchSuggestion?.nodeIdsToMove[1];
-            const showInlineSuggestion =
-              !!pendingBranchSuggestion &&
-              node.role === 'assistant' &&
-              inlineSuggestionTargetNodeId === node.node_id;
-            const showInlineStructureSuggestion =
-              !!pendingStructureSuggestion &&
-              node.role === 'assistant' &&
-              pendingStructureSuggestion.targetNodeId === node.node_id;
+            const inlineSuggestionItems =
+              node.role !== 'assistant'
+                ? []
+                : buildInlineSuggestions(
+                    {
+                      targetNodeId:
+                        pendingStructureSuggestion?.targetNodeId ||
+                        inlineSuggestionTargetNodeId ||
+                        '',
+                      branchSuggestion:
+                        inlineSuggestionTargetNodeId === node.node_id && pendingBranchSuggestion
+                          ? {
+                              reason: pendingBranchSuggestion.reason,
+                              assetAction: pendingBranchSuggestion.assetAction,
+                              assetReason: pendingBranchSuggestion.assetReason,
+                            }
+                          : null,
+                      structureSuggestion:
+                        pendingStructureSuggestion?.targetNodeId === node.node_id
+                          ? {
+                              primaryAction: pendingStructureSuggestion.primaryAction,
+                              assetAction: pendingStructureSuggestion.assetAction,
+                              reason: pendingStructureSuggestion.reason,
+                              assetReason: pendingStructureSuggestion.assetReason,
+                            }
+                          : null,
+                    },
+                    node.node_id
+                  );
+            const activeInlineItem = inlineSuggestionItems.length
+              ? inlineSuggestionItems[
+                  clampInlineSuggestionIndex(activeInlineSuggestionIndex, inlineSuggestionItems.length)
+                ]
+              : null;
             return (
               <div
                 key={node.node_id}
@@ -1217,75 +1346,93 @@ export default function ConversationStream() {
                       <ReactMarkdown>{node.content}</ReactMarkdown>
                     </div>
                   )}
-                  {showInlineSuggestion && (
-                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-amber-900">Suggest opening a new branch?</p>
-                        <p className="text-xs text-amber-800 mt-1">{pendingBranchSuggestion.reason}</p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={handleRejectBranchSuggestion}
-                          className="px-3 py-1.5 rounded-md text-xs font-medium text-zinc-700 bg-white border border-zinc-300 hover:bg-zinc-100 transition-colors"
-                        >
-                          Reject
-                        </button>
-                        <button
-                          onClick={handleAcceptBranchSuggestion}
-                          className="px-3 py-1.5 rounded-md text-xs font-medium !text-white bg-zinc-900 hover:bg-zinc-800 transition-colors"
-                          style={{ color: '#fff' }}
-                        >
-                          Accept
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {showInlineStructureSuggestion && (
-                    <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-indigo-900">Suggested next step</p>
-                        {pendingStructureSuggestion.primaryAction === 'return_parent' && pendingStructureSuggestion.reason && (
-                          <p className="text-xs text-indigo-800 mt-1">
-                            Return to parent: {pendingStructureSuggestion.reason}
+                  {activeInlineItem && (
+                    <div
+                      className={clsx(
+                        "mt-3 rounded-xl px-4 py-3",
+                        activeInlineItem.accent === 'amber'
+                          ? 'border border-amber-200 bg-amber-50'
+                          : 'border border-indigo-200 bg-indigo-50'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p
+                            className={clsx(
+                              "text-sm font-semibold",
+                              activeInlineItem.accent === 'amber' ? 'text-amber-900' : 'text-indigo-900'
+                            )}
+                          >
+                            {activeInlineItem.title}
                           </p>
-                        )}
-                        {pendingStructureSuggestion.assetAction !== 'none' && pendingStructureSuggestion.assetReason && (
-                          <p className="text-xs text-indigo-800 mt-1">
-                            {pendingStructureSuggestion.assetAction === 'extract_reasoning'
-                              ? 'Extract reasoning pattern'
-                              : 'Extract task SOP'}
-                            : {pendingStructureSuggestion.assetReason}
+                          <p
+                            className={clsx(
+                              "text-xs mt-1",
+                              activeInlineItem.accent === 'amber' ? 'text-amber-800' : 'text-indigo-800'
+                            )}
+                          >
+                            {activeInlineItem.message}
                           </p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={handleDismissStructureSuggestion}
-                          className="px-3 py-1.5 rounded-md text-xs font-medium text-zinc-700 bg-white border border-zinc-300 hover:bg-zinc-100 transition-colors"
-                        >
-                          Reject
-                        </button>
-                        {pendingStructureSuggestion.primaryAction === 'return_parent' && (
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
                           <button
-                            onClick={handleAcceptReturnSuggestion}
-                            className="px-3 py-1.5 rounded-md text-xs font-medium !text-white bg-indigo-700 hover:bg-indigo-800 transition-colors"
+                            onClick={activeInlineItem.kind === 'branch' ? handleRejectBranchSuggestion : handleDismissStructureSuggestion}
+                            disabled={structureActionInFlight !== null}
+                            className="px-3 py-1.5 rounded-md text-xs font-medium text-zinc-700 bg-white border border-zinc-300 hover:bg-zinc-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            onClick={
+                              activeInlineItem.kind === 'branch'
+                                ? handleAcceptBranchSuggestion
+                                : activeInlineItem.kind === 'branch_extract'
+                                  ? handleAcceptBranchExtractSuggestion
+                                  : activeInlineItem.kind === 'return_parent'
+                                    ? handleAcceptReturnSuggestion
+                                    : handleAcceptExtractSuggestion
+                            }
+                            disabled={structureActionInFlight !== null}
+                            className={clsx(
+                              "px-3 py-1.5 rounded-md text-xs font-medium !text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed",
+                              activeInlineItem.kind === 'return_parent'
+                                ? 'bg-indigo-700 hover:bg-indigo-800'
+                                : 'bg-zinc-900 hover:bg-zinc-800'
+                            )}
                             style={{ color: '#fff' }}
                           >
-                            Return
+                            {structureActionInFlight === 'return' && activeInlineItem.kind === 'return_parent'
+                              ? 'Returning...'
+                              : structureActionInFlight === 'extract' &&
+                                  (activeInlineItem.kind === 'branch_extract' || activeInlineItem.kind === 'structure_extract')
+                                ? 'Extracting...'
+                                : activeInlineItem.cta}
                           </button>
-                        )}
-                        {pendingStructureSuggestion.assetAction !== 'none' && (
-                          <button
-                            onClick={handleAcceptExtractSuggestion}
-                            className="px-3 py-1.5 rounded-md text-xs font-medium !text-white bg-zinc-900 hover:bg-zinc-800 transition-colors"
-                            style={{ color: '#fff' }}
-                          >
-                            {pendingStructureSuggestion.assetAction === 'extract_reasoning'
-                              ? 'Extract Reasoning'
-                              : 'Extract SOP'}
-                          </button>
-                        )}
+                        </div>
                       </div>
+                      {inlineSuggestionItems.length > 1 && (
+                        <div className="mt-3 flex items-center justify-center gap-3">
+                          <button
+                            onClick={() => goToPreviousInlineSuggestion(inlineSuggestionItems.length)}
+                            disabled={structureActionInFlight !== null}
+                            className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Previous suggestion"
+                          >
+                            <ChevronLeft size={18} />
+                          </button>
+                          <span className="min-w-10 text-center text-sm font-medium text-zinc-600 tabular-nums">
+                            {clampInlineSuggestionIndex(activeInlineSuggestionIndex, inlineSuggestionItems.length) + 1}/{inlineSuggestionItems.length}
+                          </span>
+                          <button
+                            onClick={() => goToNextInlineSuggestion(inlineSuggestionItems.length)}
+                            disabled={structureActionInFlight !== null}
+                            className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Next suggestion"
+                          >
+                            <ChevronRight size={18} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
