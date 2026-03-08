@@ -71,3 +71,37 @@
 | What's the goal? | Add remote chat-history readback that can recover a usable local conversation graph |
 | What have I learned? | The current remote schema supports best-effort graph reconstruction but not exact replay of later structure mutations |
 | What have I done? | Added reconstruction + pull flow, wired it into app startup/switching, and verified it with tests/typecheck |
+
+## Session: 2026-03-07
+
+### Follow-up Bugfix: Restored project title fallback
+- **Status:** complete
+- **Started:** 2026-03-07 21:05:00 EST
+- Actions taken:
+  - Confirmed the restored title bug came from a hardcoded `Recovered ${projectId.slice(0, 8)}` fallback in `src/services/chatHistory.ts`.
+  - Added a RED test asserting recovery uses stored `project_title` when present and still falls back for legacy rows.
+  - Updated chat logging to include `project.title` in new sync records.
+  - Updated remote reconstruction to prefer the latest stored title per project.
+  - Added a compatibility retry path that strips `project_title` if the remote Supabase table has not been migrated yet.
+  - Documented the required SQL migration in `README.md`.
+- Files created/modified:
+  - `src/services/chatHistory.ts`
+  - `src/components/ConversationStream.tsx`
+  - `scripts/test-chat-history-sync.ts`
+  - `README.md`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results (2026-03-07)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Restored title RED | `npm run test:chat-history-sync` before implementation | Fails because recovery ignores `project_title` | Failed with `actual: Recovered project-` vs `expected: Stored Project Title` | ✓ |
+| Restored title GREEN | `npm run test:chat-history-sync` after implementation | Recovery uses stored `project_title` and legacy fallback still works | Passed | ✓ |
+| Type check | `npm run lint` | No TS errors | Passed | ✓ |
+
+## Error Log (2026-03-07)
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-03-07 21:12:00 EST | `npm run test:chat-history-sync` failed because recovery ignored stored title | 1 | Expected RED step; implemented title-aware recovery |
+| 2026-03-07 21:14:00 EST | `npm run lint` failed with `body` scope errors in retry branch | 1 | Hoisted `body` variable and reran typecheck successfully |

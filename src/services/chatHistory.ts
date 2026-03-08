@@ -5,6 +5,7 @@ export type ChatHistoryRecord = {
   message_id: string;
   user_id: string;
   project_id: string;
+  project_title?: string | null;
   parent_id: string | null;
   branch_id: string | null;
   role: Node['role'];
@@ -48,6 +49,7 @@ const MAX_LOCAL_MESSAGES_PER_USER = 5000;
 const FALLBACK_LOCAL_USER_ID = 'local-anonymous';
 
 let flushPromise: Promise<void> | null = null;
+let supportsRemoteProjectTitle: boolean | null = null;
 
 const emitSyncStatusUpdated = () => {
   if (!hasWindow()) return;
@@ -145,6 +147,14 @@ const sortRecordsChronologically = (records: ChatHistoryRecord[]) =>
 
 const buildRecoveredProjectTitle = (projectId: string) => `Recovered ${projectId.slice(0, 8)}`;
 
+const resolveRecoveredProjectTitle = (projectId: string, projectRecords: ChatHistoryRecord[]) => {
+  for (let index = projectRecords.length - 1; index >= 0; index -= 1) {
+    const candidate = projectRecords[index]?.project_title?.trim();
+    if (candidate) return candidate;
+  }
+  return buildRecoveredProjectTitle(projectId);
+};
+
 export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): RecoveredChatState => {
   const ordered = sortRecordsChronologically(records);
   const nodes: Record<string, Node> = {};
@@ -187,7 +197,7 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
 
     projects[projectId] = {
       project_id: projectId,
-      title: buildRecoveredProjectTitle(projectId),
+      title: resolveRecoveredProjectTitle(projectId, projectRecords),
       root_node_id: rootNodeId,
       mainline_id: `mainline_${projectId}`,
       active_context_id: contextId,
@@ -342,18 +352,47 @@ const flushPendingInternal = async () => {
   while (queue.length > 0) {
     const batch = queue.slice(0, 100);
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          apikey: config.anonKey,
-          Authorization: `Bearer ${config.anonKey}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=ignore-duplicates,return=minimal',
-        },
-        body: JSON.stringify(batch),
-      });
+      const makeRequest = (payload: ChatHistoryRecord[]) =>
+        fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            apikey: config.anonKey,
+            Authorization: `Bearer ${config.anonKey}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=ignore-duplicates,return=minimal',
+          },
+          body: JSON.stringify(payload),
+        });
+
+      const stripProjectTitle = (payload: ChatHistoryRecord[]): ChatHistoryRecord[] =>
+        payload.map(({ project_title: _projectTitle, ...record }) => record);
+
+      const usesProjectTitle =
+        supportsRemoteProjectTitle !== false && batch.some((record) => record.project_title !== undefined);
+
+      let body = '';
+      let response = await makeRequest(
+        supportsRemoteProjectTitle === false ? stripProjectTitle(batch) : batch
+      );
       if (!response.ok) {
-        const body = await response.text().catch(() => '');
+        body = await response.text().catch(() => '');
+        const isMissingProjectTitleColumn =
+          usesProjectTitle &&
+          body.toLowerCase().includes('project_title') &&
+          (body.toLowerCase().includes('column') || body.toLowerCase().includes('schema cache'));
+
+        if (isMissingProjectTitleColumn) {
+          supportsRemoteProjectTitle = false;
+          response = await makeRequest(stripProjectTitle(batch));
+          if (response.ok) {
+            body = '';
+          } else {
+            body = await response.text().catch(() => '');
+          }
+        }
+      }
+
+      if (!response.ok) {
         console.warn('[chat-history] supabase sync failed', {
           status: response.status,
           body,
@@ -364,6 +403,10 @@ const flushPendingInternal = async () => {
           pending_count: queue.length,
         });
         return;
+      }
+
+      if (supportsRemoteProjectTitle === null && usesProjectTitle) {
+        supportsRemoteProjectTitle = true;
       }
     } catch {
       console.warn('[chat-history] supabase sync request error');
@@ -430,7 +473,7 @@ export const startChatHistorySync = () => {
 
 export const readChatHistorySyncState = (): ChatSyncState => readSyncState();
 
-export const logChatNode = async (node: Node) => {
+export const logChatNode = async (node: Node, options?: { projectTitle?: string | null }) => {
   const userId = normalizeUserId();
   if (!userId) return;
 
@@ -438,6 +481,7 @@ export const logChatNode = async (node: Node) => {
     message_id: node.node_id,
     user_id: userId,
     project_id: node.project_id,
+    project_title: options?.projectTitle?.trim() || null,
     parent_id: node.parent_id,
     branch_id: node.branch_id,
     role: node.role,

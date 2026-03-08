@@ -58,3 +58,23 @@ Phase 5
 ## Notes
 - Re-read this plan before changing merge semantics.
 - Be explicit in the final summary about recovery limits imposed by the current remote schema.
+
+## Follow-up: Restored Project Titles
+
+### Goal
+Ensure recovered projects use their stored title instead of fallback labels like `Recovered c144d8c` whenever remote chat-history data contains the title.
+
+### Phases
+- [x] Trace the restored-title data flow and confirm root cause
+- [x] Add a failing regression test for recovered project titles
+- [x] Update sync + reconstruction logic and verify
+
+### Root Cause
+- `src/services/chatHistory.ts` reconstructed every project title via `Recovered ${projectId.slice(0, 8)}`.
+- The remote `chat_history` payload did not previously include a `project_title` field, so exact titles were unrecoverable from remote-only state.
+
+### Fix Summary
+- Added optional `project_title` to chat-history records.
+- Recovery now prefers the latest non-empty stored `project_title` per project and falls back only for legacy rows.
+- Sync now attaches `project.title` when logging new nodes.
+- Upsert now auto-retries without `project_title` if the Supabase table has not been migrated yet.

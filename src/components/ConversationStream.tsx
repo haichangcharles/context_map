@@ -566,7 +566,7 @@ export default function ConversationStream() {
     const assistantNodeId = addNode(project.project_id, userNodeId, 'assistant', '', branchId);
     const persistedUserNode = useAppStore.getState().nodes[userNodeId];
     if (persistedUserNode) {
-      void logChatNode(persistedUserNode);
+      void logChatNode(persistedUserNode, { projectTitle: project.title });
     }
 
     const repairMainlineIfNeeded = () => {
@@ -644,7 +644,7 @@ export default function ConversationStream() {
       streamAbortRef.current = null;
       const persistedAssistantNode = useAppStore.getState().nodes[assistantNodeId];
       if (persistedAssistantNode) {
-        void logChatNode(persistedAssistantNode);
+        void logChatNode(persistedAssistantNode, { projectTitle: project.title });
       }
       const branchDecision = await branchDetectionPromise;
       logBranchDebug('branch-decision', {

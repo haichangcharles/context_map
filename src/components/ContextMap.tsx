@@ -1316,11 +1316,11 @@ export default function ContextMap() {
         </ReactFlow>
 
         {/* Floating View Controls */}
-        <div className="absolute top-4 right-4 max-w-[calc(100%-2rem)] bg-white/92 backdrop-blur-xl border border-zinc-200 rounded-[1.35rem] shadow-[0_18px_45px_rgba(15,23,42,0.14)] p-2 flex items-center gap-2 z-20">
+        <div className="absolute top-4 right-4 max-w-[calc(100%-2rem)] overflow-hidden bg-white/92 backdrop-blur-xl border border-zinc-200 rounded-[1.35rem] shadow-[0_18px_45px_rgba(15,23,42,0.14)] p-2 flex items-center justify-end gap-1.5 z-20">
           <button
             onClick={handleToggleSelectionMode}
             className={clsx(
-              "text-xs px-3 py-2 rounded-xl border transition-all flex items-center gap-1.5",
+              "min-w-0 shrink basis-0 text-xs px-2.5 py-2 rounded-xl border transition-all flex items-center justify-center gap-1.5",
               isSelectionMode
                 ? `${SELECTION_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(39,39,42,0.18)]`
                 : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
@@ -1334,19 +1334,19 @@ export default function ContextMap() {
           </button>
           <button
             onClick={handleRearrangeAndCenter}
-            className="text-xs text-zinc-600 px-3 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center gap-1"
+            className="min-w-0 shrink basis-0 text-xs text-zinc-600 px-2.5 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center justify-center gap-1"
             title="Rearrange and center mainline"
           >
             <WandSparkles size={13} />
-            Rearrange
+            <span className="truncate">Rearrange</span>
           </button>
           <button
             onClick={handleFitAll}
-            className="text-xs text-zinc-600 px-3 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center gap-1"
+            className="min-w-0 shrink-0 text-xs text-zinc-600 px-2.5 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center justify-center gap-1"
             title="Fit entire graph"
           >
             <Maximize2 size={13} />
-            Fit
+            <span className="truncate">Fit</span>
           </button>
           {projectNodeCount > 0 && flowNodes.length === 0 && (
             <button

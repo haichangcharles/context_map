@@ -89,9 +89,10 @@ Notes:
 - You can switch provider at runtime in `/manage` (Auto / SiliconFlow / OpenAI)
 - You can set OpenAI model override at runtime in `/manage` (stored in browser localStorage)
 - Model API keys are used only in serverless API (`/api/chat/completions`), not exposed in frontend bundle
-- If Supabase env vars are not provided, chat history is still stored locally and queued for later sync
-- App state (`projects/nodes/branches/context`) is persisted in browser `localStorage` (`context-map.app-state.v1`)
+- If Supabase env vars are not provided, chat history and patterns are still stored locally and queued for later sync
+- App state (`projects/nodes/branches/context/patterns`) is persisted in browser `localStorage` (`context-map.app-state.v1`)
 - Chat history local keys: `context-map.chat-history.by-user.v1`, `context-map.chat-history.pending-sync.v1`
+- Pattern local keys: `context-map.pattern-history.by-user.v1`, `context-map.pattern-history.pending-sync.v1`
 - Supabase sync auto-retries on app start, every 15s, when tab becomes visible, and when network comes back online
 
 ### 6.1 Supabase Table (Optional, for user study logging)
@@ -103,6 +104,7 @@ create table if not exists public.chat_history (
   message_id text primary key,
   user_id text not null,
   project_id text not null,
+  project_title text null,
   parent_id text null,
   branch_id text null,
   role text not null,
@@ -120,7 +122,50 @@ to anon
 with check (true);
 ```
 
-The app now stores every message in `localStorage` first and then upserts to Supabase when network/env is available.
+If you already created the table before this change, run:
+
+```sql
+alter table public.chat_history
+add column if not exists project_title text null;
+```
+
+Also create the pattern sync table:
+
+```sql
+create table if not exists public.patterns (
+  pattern_id text primary key,
+  user_id text not null,
+  type text not null,
+  name text not null,
+  requires_human_review boolean not null default false,
+  instruction text not null default '',
+  example text not null default '',
+  review_status text not null default 'pending',
+  source_from_node_id text not null,
+  source_to_node_id text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  created_from_project_id text null,
+  is_deleted boolean not null default false,
+  captured_at timestamptz not null default now()
+);
+
+alter table public.patterns enable row level security;
+
+create policy "allow anon upsert patterns"
+on public.patterns
+for insert
+to anon
+with check (true);
+
+create policy "allow anon select patterns"
+on public.patterns
+for select
+to anon
+using (true);
+```
+
+The app stores messages and patterns in `localStorage` first, then upserts to Supabase when network/env is available.
 
 ## 7. Common Scripts
 

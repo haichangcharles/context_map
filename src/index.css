@@ -38,3 +38,9 @@
 .markdown-body li + li {
   margin-top: 0.35rem;
 }
+
+body.resizing-context-map,
+body.resizing-context-map * {
+  user-select: none;
+  cursor: col-resize !important;
+}

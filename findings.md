@@ -42,3 +42,9 @@
   - active context selection is unrecoverable
   - branch summaries/status/history mutations are unrecoverable
   - branch promotions/accepted-branch rewrites after original message creation are unrecoverable
+
+## Follow-up Findings: Recovered Title Bug
+- The user-reported `Recovered c144d8c` label came from a hardcoded fallback in `reconstructChatStateFromRecords`, not from any dynamic title derivation.
+- Recovery can preserve the true title if chat-history rows carry `project_title`; using the latest non-empty title per project is the safest merge rule when titles may be renamed later.
+- Adding `project_title` to outgoing rows would break older Supabase tables unless the client either coordinates a migration or retries without that field; the implementation now performs that downgrade automatically.
+- Legacy remote rows created before this change still cannot recover exact historical titles unless those rows are re-synced with `project_title` present.

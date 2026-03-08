@@ -76,10 +76,12 @@ export default function App() {
     };
 
     if (isDragging) {
+      document.body.classList.add('resizing-context-map');
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }
     return () => {
+      document.body.classList.remove('resizing-context-map');
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
@@ -266,7 +268,10 @@ export default function App() {
               {!isContextMapFullscreen && (
                 <div
                   className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-400 z-30 transition-colors"
-                  onMouseDown={() => setIsDragging(true)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
                 />
               )}
               
