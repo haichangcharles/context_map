@@ -1098,6 +1098,9 @@ export default function ContextMap() {
   const canUndoStructure = pastStructureSnapshots.length > 0;
   const canRedoStructure = futureStructureSnapshots.length > 0;
   const hasNaturalResetTarget = !!project && ((mainlines[project.project_id] || []).join('|') !== ((naturalMainlines[project.project_id] || []).join('|')));
+  const isDeleteSuccessNotice = !!selectionNotice?.id?.startsWith('delete-confirmed-');
+  const pendingDeleteCount = pendingDeletePreview?.deletedNodeIds.length ?? 0;
+  const pendingPlaceholderCount = pendingDeletePreview?.placeholderNodeIds.length ?? 0;
 
   useEffect(() => {
     setPendingDeletePreview(null);
@@ -1178,12 +1181,8 @@ export default function ContextMap() {
     handleStartSelectionMode('batch');
   }, [finishSelectionMode, handleStartSelectionMode, isSelectionMode, selectionIntent]);
 
-  const handleDeleteButton = useCallback(() => {
+  const handleDeleteAction = useCallback(() => {
     if (!project) return;
-    if (!isSelectionMode || selectionIntent !== 'delete') {
-      handleStartSelectionMode('delete');
-      return;
-    }
     if (selectedNodeIds.length === 0) {
       emitSelectionNotice({
         id: `delete-select-first-${Date.now()}`,
@@ -1196,7 +1195,15 @@ export default function ContextMap() {
     const preview = previewDeleteSelectedNodes(project.project_id, selectedNodeIds);
     if (!preview) return;
     setPendingDeletePreview(preview);
-  }, [project, isSelectionMode, selectionIntent, handleStartSelectionMode, selectedNodeIds, emitSelectionNotice, previewDeleteSelectedNodes]);
+  }, [project, selectedNodeIds, emitSelectionNotice, previewDeleteSelectedNodes]);
+
+  const handleToggleDeleteMode = useCallback(() => {
+    if (isSelectionMode && selectionIntent === 'delete') {
+      finishSelectionMode();
+      return;
+    }
+    handleStartSelectionMode('delete');
+  }, [finishSelectionMode, handleStartSelectionMode, isSelectionMode, selectionIntent]);
 
   const handleConfirmDelete = useCallback(() => {
     if (!project || selectedNodeIds.length === 0) return;
@@ -1260,6 +1267,11 @@ export default function ContextMap() {
       });
     });
   }, [renderProject, rfInstance, renderMainlines]);
+
+  const handleUndoDeleteNotice = useCallback(() => {
+    undoStructureChange();
+    emitSelectionNotice(null);
+  }, [undoStructureChange, emitSelectionNotice]);
 
   const getVisibleNodesForBasePath = useCallback((basePath: string): Node[] => {
     return resolveVisibleNodesForBasePath(basePath, branches, nodes, resolvedMainlineNodeIds);
@@ -1428,17 +1440,17 @@ export default function ContextMap() {
             <span className="truncate">Rearrange</span>
           </button>
           <button
-            onClick={handleDeleteButton}
+            onClick={handleToggleDeleteMode}
             className={clsx(
               "min-w-0 shrink-0 text-xs px-2.5 py-2 rounded-xl border transition-colors flex items-center justify-center gap-1",
               isSelectionMode && selectionIntent === 'delete'
                 ? `${DELETE_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(225,29,72,0.18)]`
                 : "text-rose-700 border-rose-200 bg-rose-50 hover:bg-rose-100"
             )}
-            title={isSelectionMode && selectionIntent === 'delete' ? 'Preview and confirm delete for selected nodes' : 'Start delete selection mode'}
+            title={isSelectionMode && selectionIntent === 'delete' ? 'Finish delete selection mode' : 'Start delete selection mode'}
           >
-            <Trash2 size={13} />
-            <span className="truncate">{isSelectionMode && selectionIntent === 'delete' ? 'Delete' : 'Delete'}</span>
+            {isSelectionMode && selectionIntent === 'delete' ? <X size={13} className="!text-white" /> : <Trash2 size={13} />}
+            <span className="truncate">{isSelectionMode && selectionIntent === 'delete' ? 'Finish' : 'Delete'}</span>
           </button>
           {projectNodeCount > 0 && flowNodes.length === 0 && (
             <button
@@ -1454,71 +1466,25 @@ export default function ContextMap() {
           )}
         </div>
 
-        {pendingDeletePreview && (
-          <div
-            className="absolute left-4 top-20 z-20 w-[min(24rem,calc(100%-2rem))] rounded-[1.2rem] border border-rose-200 bg-white/95 p-3 shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur-xl"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="mb-1 inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-rose-700">
-                  <Trash2 size={12} />
-                  Delete Preview
-                </div>
-                <h3 className="text-sm font-semibold text-slate-950">Previewing the post-delete context map</h3>
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  {pendingDeletePreview.summary}
-                </p>
-              </div>
-              <button
-                onClick={() => setPendingDeletePreview(null)}
-                className="rounded-full border border-zinc-200 p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
-                aria-label="Close delete preview"
-              >
-                <X size={14} />
-              </button>
-            </div>
-
-            <div className="mt-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs leading-5 text-slate-600">
-              {pendingDeletePreview.requiresPlaceholder
-                ? 'Placeholder nodes are highlighted in amber. Rearrange now only affects this previewed structure.'
-                : 'This preview is rendered from the candidate structure only. Cancel keeps the current map unchanged.'}
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-              <button
-                onClick={() => setPendingDeletePreview(null)}
-                className="rounded-full border border-zinc-300 bg-white px-3.5 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDelete}
-                className="inline-flex items-center gap-2 rounded-full border border-rose-600 bg-rose-600 px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-rose-700"
-              >
-                <Trash2 size={15} />
-                Confirm delete
-              </button>
-            </div>
-          </div>
-        )}
-
         {selectionNotice && (
           <div
             className={clsx(
-              "absolute top-20 right-4 z-20",
-              selectionNotice.tone === 'success'
-                ? "w-[min(15rem,calc(100%-2rem))]"
-                : "w-[min(18rem,calc(100%-2rem))]"
+              "absolute bottom-24 right-4 z-20",
+              isDeleteSuccessNotice
+                ? "w-[min(16rem,calc(100%-2rem))]"
+                : selectionNotice.tone === 'success'
+                  ? "w-[min(13.5rem,calc(100%-2rem))]"
+                  : "w-[min(15.5rem,calc(100%-2rem))]"
             )}
           >
             <div
               className={clsx(
                 "rounded-[1.2rem] border bg-white/94 backdrop-blur-xl",
-                selectionNotice.tone === 'success'
+                isDeleteSuccessNotice
+                  ? "p-2 shadow-[0_12px_24px_rgba(15,23,42,0.1)]"
+                  : selectionNotice.tone === 'success'
                   ? "p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.1)]"
-                  : "p-3 shadow-[0_16px_40px_rgba(15,23,42,0.14)]",
+                  : "p-2.5 shadow-[0_14px_32px_rgba(15,23,42,0.12)]",
                 selectionNotice.tone === 'info' && "border-zinc-200 text-slate-900",
                 selectionNotice.tone === 'success' && "border-emerald-200 text-emerald-950",
                 selectionNotice.tone === 'warning' && "border-amber-200 text-amber-950",
@@ -1527,10 +1493,10 @@ export default function ContextMap() {
               role="status"
               aria-live="polite"
             >
-              <div className={clsx("flex items-start", selectionNotice.tone === 'success' ? "gap-2.5" : "gap-3")}>
+              <div className="flex items-start gap-2.5">
                 <div
                   className={clsx(
-                    "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border",
+                    "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-2xl border",
                     selectionNotice.tone === 'info' && "border-zinc-200 bg-zinc-100 text-zinc-700",
                     selectionNotice.tone === 'success' && "border-emerald-200 bg-emerald-50 text-emerald-700",
                     selectionNotice.tone === 'warning' && "border-amber-200 bg-amber-50 text-amber-700",
@@ -1545,10 +1511,12 @@ export default function ContextMap() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      {selectionNotice.tone !== 'success' && (
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Context Map</p>
+                      {!isDeleteSuccessNotice && selectionNotice.tone !== 'success' && (
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Context Map</p>
                       )}
-                      <h3 className={clsx(selectionNotice.tone === 'success' ? "text-[13px] font-semibold" : "mt-1 text-sm font-semibold")}>
+                      <h3 className={clsx(
+                        isDeleteSuccessNotice ? "text-[12px] font-semibold" : selectionNotice.tone === 'success' ? "text-[13px] font-semibold" : "mt-0.5 text-[13px] font-semibold"
+                      )}>
                         {selectionNotice.title}
                       </h3>
                     </div>
@@ -1560,22 +1528,32 @@ export default function ContextMap() {
                       <X size={14} />
                     </button>
                   </div>
-                  <p className={clsx(selectionNotice.tone === 'success' ? "mt-1 text-[12px] leading-5 text-slate-600" : "mt-2 text-sm leading-5")}>
+                  <p className={clsx(
+                    isDeleteSuccessNotice ? "mt-1 text-[11px] leading-5 text-slate-600" : selectionNotice.tone === 'success' ? "mt-1 text-[12px] leading-5 text-slate-600" : "mt-1.5 text-[12px] leading-5 text-slate-600"
+                  )}>
                     {selectionNotice.message}
                   </p>
-                  {selectionNotice.details && (
+                  {isDeleteSuccessNotice && canUndoStructure && (
+                    <button
+                      onClick={handleUndoDeleteNotice}
+                      className="mt-2 inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                    >
+                      Undo
+                    </button>
+                  )}
+                  {selectionNotice.details && !isDeleteSuccessNotice && (
                     <button
                       onClick={() => setIsSelectionNoticeExpanded((prev) => !prev)}
                       className={clsx(
                         "text-xs font-medium text-slate-500 transition-colors hover:text-slate-900",
-                        selectionNotice.tone === 'success' ? "mt-1.5" : "mt-2"
+                        selectionNotice.tone === 'success' ? "mt-1.5" : "mt-1.5"
                       )}
                     >
                       {isSelectionNoticeExpanded ? 'Hide details' : 'View details'}
                     </button>
                   )}
-                  {isSelectionNoticeExpanded && selectionNotice.details && (
-                    <div className="mt-2 rounded-2xl border border-black/5 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-100 whitespace-pre-line">
+                  {isSelectionNoticeExpanded && selectionNotice.details && !isDeleteSuccessNotice && (
+                    <div className="mt-2 rounded-2xl border border-black/5 bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-100 whitespace-pre-line">
                       {selectionNotice.details}
                     </div>
                   )}
@@ -1688,33 +1666,69 @@ export default function ContextMap() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex flex-wrap items-center gap-1.5">
-              <div className={clsx("mr-1 flex items-center gap-1.5 rounded-full px-2.5 py-1.5", DELETE_ACTIVE_SURFACE)}>
-                <span className="text-xs font-semibold leading-none">
-                  {selectedNodeIds.length}
-                </span>
-                <span className="text-[11px] font-medium leading-none">
-                  marked
-                </span>
-              </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteButton();
-                }}
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-100"
-              >
-                <Trash2 size={14} />
-                Preview delete
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  clearSelectionState();
-                }}
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
-              >
-                Clear
-              </button>
+              {!pendingDeletePreview ? (
+                <>
+                  <div className={clsx("mr-1 flex items-center gap-1.5 rounded-full px-2.5 py-1.5", DELETE_ACTIVE_SURFACE)}>
+                    <span className="text-xs font-semibold leading-none">
+                      {selectedNodeIds.length}
+                    </span>
+                    <span className="text-[11px] font-medium leading-none">
+                      selected
+                    </span>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteAction();
+                    }}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-100"
+                  >
+                    <Trash2 size={14} />
+                    Delete...
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clearSelectionState();
+                    }}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                  >
+                    Clear
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="mr-1 min-w-0 px-1">
+                    <p className="text-[12px] font-semibold text-slate-900">
+                      Delete {pendingDeleteCount} node{pendingDeleteCount === 1 ? '' : 's'}?
+                    </p>
+                    {pendingPlaceholderCount > 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        Insert {pendingPlaceholderCount} placeholder{pendingPlaceholderCount === 1 ? '' : 's'} to preserve branches
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPendingDeletePreview(null);
+                    }}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleConfirmDelete();
+                    }}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-rose-600 bg-rose-600 px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-rose-700"
+                  >
+                    <Trash2 size={14} />
+                    Confirm delete
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
