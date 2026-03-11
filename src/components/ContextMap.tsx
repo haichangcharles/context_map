@@ -4,7 +4,7 @@ import { ReactFlow, Background, Controls, Node as FlowNode, Edge, Position, Mark
 import '@xyflow/react/dist/style.css';
 import { Node, Branch, PatternType, SelectionNotice, DeleteSelectionPreview } from '../types';
 import clsx from 'clsx';
-import { Layers, Eye, EyeOff, GitBranch, MousePointerSquareDashed, WandSparkles, Undo2, Redo2, RotateCcw, History, ArrowRightLeft, Sparkles, X, Info, CheckCircle2, TriangleAlert, CircleAlert, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, GitBranch, Undo2, Redo2, RotateCcw, History, ArrowRightLeft, X, Info, CheckCircle2, TriangleAlert, CircleAlert, Trash2, Plus, Minus, MousePointerSquareDashed, Rows3, Sparkles } from 'lucide-react';
 import dagre from 'dagre';
 import { buildQAPair, logBranchDebug, logContextMapDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { extractPatternByType } from '../services/gemini';
@@ -401,6 +401,7 @@ export default function ContextMap() {
   const [isSelectionNoticeExpanded, setIsSelectionNoticeExpanded] = useState(false);
   
   const [rfInstance, setRfInstance] = useState<any>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const previousLayoutModeRef = useRef<LayoutMode>('tree');
   const previousLayoutRefreshTokenRef = useRef(0);
@@ -1085,7 +1086,12 @@ export default function ContextMap() {
   // Auto fit view on resize
   useEffect(() => {
     if (!rfInstance || !containerRef.current) return;
+    const updateWidth = () => {
+      setContainerWidth(containerRef.current?.clientWidth || 0);
+    };
+    updateWidth();
     const observer = new ResizeObserver(() => {
+      updateWidth();
       window.requestAnimationFrame(() => {
         rfInstance.fitView({ duration: 0, padding: 0.1 });
       });
@@ -1101,6 +1107,9 @@ export default function ContextMap() {
   const isDeleteSuccessNotice = !!selectionNotice?.id?.startsWith('delete-confirmed-');
   const pendingDeleteCount = pendingDeletePreview?.deletedNodeIds.length ?? 0;
   const pendingPlaceholderCount = pendingDeletePreview?.placeholderNodeIds.length ?? 0;
+  const iconOnlyToolstrip = containerWidth > 0 && containerWidth < 400;
+  const compactActionBar = containerWidth > 0 && containerWidth < 760;
+  const iconOnlyActionBar = containerWidth > 0 && containerWidth < 600;
 
   useEffect(() => {
     setPendingDeletePreview(null);
@@ -1329,11 +1338,7 @@ export default function ContextMap() {
 
   return (
     <div className="flex flex-col h-full bg-zinc-50" ref={containerRef}>
-      <div className="p-4 border-b border-zinc-200 bg-white flex items-center justify-between shadow-sm z-10">
-        <div className="flex items-center gap-2 font-semibold text-zinc-800">
-          <Layers size={18} />
-          Context Map
-        </div>
+      <div className="p-4 border-b border-zinc-200 bg-white flex items-center justify-start shadow-sm z-10">
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center rounded-md border border-zinc-300 overflow-hidden bg-white">
             <div className="px-2 text-zinc-500" title="History controls">
@@ -1379,16 +1384,6 @@ export default function ContextMap() {
               <RotateCcw size={13} />
             </button>
           </div>
-          <div className="text-xs text-zinc-500 flex items-center gap-1">
-            <MousePointerSquareDashed size={14} />
-            <span className="hidden md:inline">
-              {isSelectionMode
-                ? selectionIntent === 'delete'
-                  ? 'Delete mode: select nodes, preview, then confirm'
-                  : 'Selection active: click add, Shift+drag box'
-                : 'Click toggles node context'}
-            </span>
-          </div>
         </div>
       </div>
       
@@ -1415,50 +1410,59 @@ export default function ContextMap() {
         </ReactFlow>
 
         {/* Floating View Controls */}
-        <div className="absolute top-4 right-4 max-w-[calc(100%-2rem)] overflow-hidden bg-white/92 backdrop-blur-xl border border-zinc-200 rounded-[1.35rem] shadow-[0_18px_45px_rgba(15,23,42,0.14)] p-2 flex items-center justify-end gap-1.5 z-20">
+        <div className="absolute right-4 left-auto top-4 z-20 flex max-w-[calc(100%-5rem)] items-center justify-end gap-2">
+          <div className="flex overflow-hidden rounded-[0.95rem] border border-zinc-200 bg-white/95 shadow-[0_12px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl">
           <button
             onClick={handleToggleSelectionMode}
             className={clsx(
-              "min-w-0 flex-1 overflow-hidden text-xs px-2.5 py-2 rounded-xl border transition-all flex items-center justify-center gap-1.5",
+              "flex h-10 items-center justify-center gap-1.5 border-r border-zinc-200 px-3 text-[11px] font-medium transition-colors",
+              iconOnlyToolstrip ? "w-10" : "min-w-[7rem]",
               isSelectionMode && selectionIntent === 'batch'
-                ? `${SELECTION_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(39,39,42,0.18)]`
+                ? `${SELECTION_ACTIVE_SURFACE}`
                 : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
             )}
             title={isSelectionMode ? 'Finish node selection mode' : 'Start selecting nodes for batch actions'}
           >
-            {isSelectionMode && selectionIntent === 'batch' ? <X size={13} className="!text-white" /> : <Sparkles size={13} className="text-inherit" />}
-            <span className={clsx("truncate", isSelectionMode && selectionIntent === 'batch' && "!text-white")}>
-              {isSelectionMode && selectionIntent === 'batch' ? 'Finish' : 'Selection'}
-            </span>
+            {isSelectionMode && selectionIntent === 'batch' ? <X size={13} className="!text-white" /> : <MousePointerSquareDashed size={13} className="text-inherit" />}
+            {!iconOnlyToolstrip && (
+              <span className={clsx(isSelectionMode && selectionIntent === 'batch' && "!text-white")}>
+                {isSelectionMode && selectionIntent === 'batch' ? 'Finish' : 'Selection'}
+              </span>
+            )}
           </button>
           <button
             onClick={handleRearrangeAndCenter}
-            className="min-w-0 flex-1 overflow-hidden text-xs text-zinc-600 px-2.5 py-2 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-100 transition-colors flex items-center justify-center gap-1"
+            className={clsx(
+              "flex h-10 items-center justify-center gap-1.5 border-r border-zinc-200 px-3 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100",
+              iconOnlyToolstrip ? "w-10" : "min-w-[7.5rem]"
+            )}
             title="Rearrange and center mainline"
           >
-            <WandSparkles size={13} />
-            <span className="truncate">Rearrange</span>
+            <Rows3 size={13} />
+            {!iconOnlyToolstrip && <span>Rearrange</span>}
           </button>
           <button
             onClick={handleToggleDeleteMode}
             className={clsx(
-              "min-w-0 shrink-0 text-xs px-2.5 py-2 rounded-xl border transition-colors flex items-center justify-center gap-1",
+              "flex h-10 items-center justify-center gap-1.5 px-3 text-[11px] font-medium transition-colors",
+              iconOnlyToolstrip ? "w-10" : "min-w-[6.5rem]",
               isSelectionMode && selectionIntent === 'delete'
-                ? `${DELETE_ACTIVE_SURFACE} shadow-[0_10px_20px_rgba(225,29,72,0.18)]`
+                ? `${DELETE_ACTIVE_SURFACE}`
                 : "text-rose-700 border-rose-200 bg-rose-50 hover:bg-rose-100"
             )}
             title={isSelectionMode && selectionIntent === 'delete' ? 'Finish delete selection mode' : 'Start delete selection mode'}
           >
             {isSelectionMode && selectionIntent === 'delete' ? <X size={13} className="!text-white" /> : <Trash2 size={13} />}
-            <span className="truncate">{isSelectionMode && selectionIntent === 'delete' ? 'Finish' : 'Delete'}</span>
+            {!iconOnlyToolstrip && <span>{isSelectionMode && selectionIntent === 'delete' ? 'Finish' : 'Delete'}</span>}
           </button>
+          </div>
           {projectNodeCount > 0 && flowNodes.length === 0 && (
             <button
               onClick={() => {
                 setLayoutRefreshToken((n) => n + 1);
                 handleRearrangeAndCenter();
               }}
-              className="text-xs text-amber-700 px-2 py-1 rounded-md border border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors"
+              className="h-10 rounded-[0.95rem] border border-amber-300 bg-amber-50 px-3 text-[11px] font-medium text-amber-700 shadow-[0_10px_24px_rgba(217,119,6,0.1)] transition-colors hover:bg-amber-100"
               title="Recover map rendering"
             >
               Recover Map
@@ -1566,18 +1570,16 @@ export default function ContextMap() {
         {/* Floating Batch Action Bar */}
         {isSelectionMode && selectionIntent === 'batch' && selectedNodeIds.length > 0 && (
           <div
-            className="absolute top-20 right-4 z-20 max-w-[calc(100%-2rem)] rounded-[1.1rem] border border-zinc-200 bg-white/96 p-2 text-slate-900 shadow-[0_10px_26px_rgba(15,23,42,0.1)] backdrop-blur-xl"
+            className="absolute left-auto right-4 top-20 z-20 max-w-[calc(100%-2rem)] rounded-[0.95rem] border border-zinc-200 bg-white/96 p-1.5 text-slate-900 shadow-[0_10px_22px_rgba(15,23,42,0.08)] backdrop-blur-xl"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex flex-wrap items-center gap-1.5">
-              <div className={clsx("mr-1 flex items-center gap-1.5 rounded-full px-2.5 py-1.5", SELECTION_ACTIVE_SURFACE)}>
+            <div className="flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className={clsx("mr-1 flex h-9 items-center gap-1.5 rounded-md px-2.5", SELECTION_ACTIVE_SURFACE)}>
                 <span className="text-xs font-semibold leading-none">
                   {selectedNodeIds.length}
                 </span>
-                <span className="text-[11px] font-medium leading-none">
-                  selected
-                </span>
+                {!iconOnlyActionBar && <span className="text-[11px] font-medium leading-none">selected</span>}
               </div>
               <button
                 onClick={(e) => {
@@ -1586,13 +1588,14 @@ export default function ContextMap() {
                 }}
                 disabled={isBatchBusy || selectedNodeIds.length === 0}
                 className={clsx(
-                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  "inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
                   isBatchBusy || selectedNodeIds.length === 0
                     ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
                     : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
                 )}
               >
-                + Include
+                <Plus size={14} />
+                {!iconOnlyActionBar && 'Include'}
               </button>
               <button
                 onClick={(e) => {
@@ -1601,13 +1604,14 @@ export default function ContextMap() {
                 }}
                 disabled={isBatchBusy || selectedNodeIds.length === 0}
                 className={clsx(
-                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  "inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
                   isBatchBusy || selectedNodeIds.length === 0
                     ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
                     : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
                 )}
               >
-                - Exclude
+                <Minus size={14} />
+                {!iconOnlyActionBar && 'Exclude'}
               </button>
               <button
                 onClick={(e) => {
@@ -1616,22 +1620,25 @@ export default function ContextMap() {
                 }}
                 disabled={isBatchBusy || selectedNodeIds.length === 0}
                 className={clsx(
-                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  "inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
                   isBatchBusy || selectedNodeIds.length === 0
                     ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
                     : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
                 )}
               >
                 <ArrowRightLeft size={14} />
-                Invert
+                {!iconOnlyActionBar && 'Invert'}
               </button>
-              <div className="mx-1 h-6 w-px bg-slate-200" />
+              {!compactActionBar && <div className="mx-1 h-6 w-px bg-slate-200" />}
               <select
                 value={pendingPatternType}
                 onChange={(e) => setPendingPatternType(e.target.value as PatternType)}
                 disabled={isBatchBusy}
                 aria-label="Pattern type"
-                className="h-8 rounded-full border border-slate-300 bg-white px-2.5 text-[11px] text-slate-700 outline-none"
+                className={clsx(
+                  "h-9 border border-slate-300 bg-white text-[11px] text-slate-700 outline-none",
+                  compactActionBar ? "w-[7rem] rounded-md px-2.5" : "rounded-md px-3"
+                )}
               >
                 {PATTERN_TYPE_ORDER.map((type) => (
                   <option key={type} value={type}>
@@ -1646,14 +1653,14 @@ export default function ContextMap() {
                 }}
                 disabled={isBatchBusy || selectedNodeIds.length === 0}
                 className={clsx(
-                  "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                  "inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
                   isBatchBusy || selectedNodeIds.length === 0
                     ? "border-slate-200 bg-slate-200 text-slate-500 cursor-not-allowed"
                     : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
                 )}
               >
                 <Sparkles size={14} className="text-inherit" />
-                <span>{isBatchBusy ? 'Extracting...' : 'Extract'}</span>
+                {!iconOnlyActionBar && <span>{isBatchBusy ? 'Extracting...' : 'Extract'}</span>}
               </button>
             </div>
           </div>
@@ -1661,39 +1668,37 @@ export default function ContextMap() {
 
         {isSelectionMode && selectionIntent === 'delete' && selectedNodeIds.length > 0 && (
           <div
-            className="absolute top-20 right-4 z-20 max-w-[calc(100%-2rem)] rounded-[1.1rem] border border-rose-200 bg-white/96 p-2 text-slate-900 shadow-[0_10px_26px_rgba(225,29,72,0.1)] backdrop-blur-xl"
+            className="absolute left-auto right-4 top-20 z-20 max-w-[calc(100%-2rem)] rounded-[0.95rem] border border-rose-200 bg-white/96 p-1.5 text-slate-900 shadow-[0_10px_22px_rgba(225,29,72,0.08)] backdrop-blur-xl"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {!pendingDeletePreview ? (
                 <>
-                  <div className={clsx("mr-1 flex items-center gap-1.5 rounded-full px-2.5 py-1.5", DELETE_ACTIVE_SURFACE)}>
+                  <div className={clsx("mr-1 flex h-9 items-center gap-1.5 rounded-md px-2.5", DELETE_ACTIVE_SURFACE)}>
                     <span className="text-xs font-semibold leading-none">
                       {selectedNodeIds.length}
                     </span>
-                    <span className="text-[11px] font-medium leading-none">
-                      selected
-                    </span>
+                    {!iconOnlyActionBar && <span className="text-[11px] font-medium leading-none">selected</span>}
                   </div>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDeleteAction();
                     }}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-100"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-100"
                   >
                     <Trash2 size={14} />
-                    Delete...
+                    {!iconOnlyActionBar && 'Delete...'}
                   </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       clearSelectionState();
                     }}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
                   >
-                    Clear
+                    {!iconOnlyActionBar ? 'Clear' : <X size={14} />}
                   </button>
                 </>
               ) : (
@@ -1702,7 +1707,7 @@ export default function ContextMap() {
                     <p className="text-[12px] font-semibold text-slate-900">
                       Delete {pendingDeleteCount} node{pendingDeleteCount === 1 ? '' : 's'}?
                     </p>
-                    {pendingPlaceholderCount > 0 && (
+                    {pendingPlaceholderCount > 0 && !compactActionBar && (
                       <p className="text-[11px] text-amber-700">
                         Insert {pendingPlaceholderCount} placeholder{pendingPlaceholderCount === 1 ? '' : 's'} to preserve branches
                       </p>
@@ -1713,19 +1718,19 @@ export default function ContextMap() {
                       e.stopPropagation();
                       setPendingDeletePreview(null);
                     }}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
                   >
-                    Cancel
+                    {!iconOnlyActionBar ? 'Cancel' : <X size={14} />}
                   </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleConfirmDelete();
                     }}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-rose-600 bg-rose-600 px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-rose-700"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-rose-600 bg-rose-600 px-3 text-[11px] font-medium text-white transition-colors hover:bg-rose-700"
                   >
                     <Trash2 size={14} />
-                    Confirm delete
+                    {!iconOnlyActionBar && 'Confirm delete'}
                   </button>
                 </>
               )}

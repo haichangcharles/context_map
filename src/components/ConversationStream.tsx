@@ -374,14 +374,6 @@ export default function ConversationStream() {
     }
   }, [project?.project_id, rawMainlineNodeIds.length, validMainlineNodeIds.length, fallbackMainlineNodeIds.length]);
 
-  if (!project || !context) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-zinc-400 bg-white">
-        Select or create a project to start.
-      </div>
-    );
-  }
-
   // Compute the visible nodes based on the base_path
   let visibleNodes: Node[] = [];
   if (isMainline) {
@@ -395,8 +387,12 @@ export default function ConversationStream() {
     );
   }
 
-  const effectiveNodes = visibleNodes.filter(n => !context.excluded_nodes.includes(n.node_id));
-  const includedExtraNodes = context.included_nodes.map(id => nodes[id]).filter(Boolean);
+  const effectiveNodes = context
+    ? visibleNodes.filter((n) => !context.excluded_nodes.includes(n.node_id))
+    : [];
+  const includedExtraNodes = context
+    ? context.included_nodes.map((id) => nodes[id]).filter(Boolean)
+    : [];
   
   const allEffectiveNodes = [...new Set([...effectiveNodes, ...includedExtraNodes])]
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -408,7 +404,7 @@ export default function ConversationStream() {
     patternPage * PATTERN_PAGE_SIZE,
     patternPage * PATTERN_PAGE_SIZE + PATTERN_PAGE_SIZE
   );
-  const enabledPatternMap = context.enabled_patterns_by_type || {};
+  const enabledPatternMap = context?.enabled_patterns_by_type || {};
   const patternAppendix = buildPatternAppendix(enabledPatternMap, patterns);
   const selectedNodeIdSet = new Set(selectedNodeIds);
 
@@ -1167,6 +1163,14 @@ export default function ConversationStream() {
     }, 3200);
     return () => window.clearTimeout(timeout);
   }, [inlineNotice]);
+
+  if (!project || !context) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-zinc-400 bg-white">
+        Select or create a project to start.
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col h-full bg-white relative">

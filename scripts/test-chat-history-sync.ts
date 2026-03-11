@@ -139,6 +139,36 @@ const run = () => {
   assert.ok(!remoteDeletionMerged.nodes['m2'], 'remote tombstones should prevent deleted nodes from being restored into a fresh store');
   assert.deepEqual(remoteDeletionMerged.deletedNodeIds, ['m2'], 'remote tombstones should hydrate deleted ids into store state');
 
+  useAppStore.setState(useAppStore.getInitialState(), true);
+  useAppStore.setState({
+    projects: {
+      'project-1': recovered.projects['project-1'],
+    },
+    nodes: {
+      m1: recovered.nodes['m1'],
+      b1: recovered.nodes['b1'],
+      b2: recovered.nodes['b2'],
+    },
+    branches: recovered.branches,
+    mainlines: recovered.mainlines,
+    contexts: recovered.contexts,
+    naturalMainlines: recovered.naturalMainlines,
+    naturalBranches: recovered.naturalBranches,
+    activeProjectId: 'project-1',
+    deletedNodeIds: [],
+  });
+  useAppStore.getState().deleteProject('project-1');
+  const afterProjectDelete = useAppStore.getState();
+  assert.equal(afterProjectDelete.projects['project-1'], undefined, 'local delete should remove the project immediately');
+  assert.deepEqual(
+    new Set(afterProjectDelete.deletedNodeIds),
+    new Set(['m1', 'b1', 'b2']),
+    'project delete should retain tombstones for every deleted node'
+  );
+  mergeRecoveredChatStateIntoStore(reconstructChatStateFromRecords(records));
+  const afterRemoteMerge = useAppStore.getState();
+  assert.equal(afterRemoteMerge.projects['project-1'], undefined, 'stale remote history should not restore a locally deleted project');
+
   const fallbackRecovered = reconstructChatStateFromRecords([
     {
       message_id: 'legacy-1',

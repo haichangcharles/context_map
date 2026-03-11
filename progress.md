@@ -150,3 +150,54 @@
   - `src/types.ts`
   - `src/components/ContextMap.tsx`
   - `scripts/test-delete-selected-nodes.ts`
+
+## Session: 2026-03-10
+
+### Follow-up Bugfix: Delete active project no longer trips React hook invariant
+- **Status:** complete
+- **Started:** 2026-03-10 00:00:00 EST
+- Actions taken:
+  - Mapped the reported production crash to React error `#300` and traced it to hook-order mismatch.
+  - Confirmed `deleteProject` clears `activeProjectId`, making `ConversationStream` lose `project/context` during the next render.
+  - Found an early empty-state return in `src/components/ConversationStream.tsx` that occurred before later `useEffect` hooks.
+  - Moved the empty-state return below the component's hooks and made the pre-return derived values null-safe so hook count stays stable after deletion.
+  - Ran `npm run lint` and `npm run build` to verify the change compiles cleanly.
+- Files created/modified:
+  - `src/components/ConversationStream.tsx`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results (2026-03-10)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
+| Production build | `npm run build` | App builds successfully after hook-order fix | Passed | ✓ |
+
+## Error Log (2026-03-10)
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-03-09 21:20:00 EDT | Runtime crash after deleting active project with React error `#300` | 1 | Traced to early return before later hooks in `ConversationStream`; moved empty-state return below hooks |
+
+### Follow-up Bugfix: Deleted project no longer reappears after sync
+- **Status:** complete
+- Actions taken:
+  - Added a RED regression case in `scripts/test-chat-history-sync.ts` covering `deleteProject()` followed by stale remote merge.
+  - Confirmed `deleteProject` was dropping all deleted node tombstones, which let remote reconstruction restore the project.
+  - Updated `deleteProject` to retain deleted node IDs for the removed project and enqueue delete tombstones for every project node.
+  - Updated remote-state filtering to drop projects and contexts that have no surviving nodes after tombstone filtering.
+  - Re-ran `npm run test:chat-history-sync`, `npm run lint`, and `npm run build`.
+- Files created/modified:
+  - `src/store.ts`
+  - `scripts/test-chat-history-sync.ts`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results (2026-03-10, delete-project persistence)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Chat history project-delete RED | `npm run test:chat-history-sync` before fix | Fails because project tombstones are lost and stale remote merge restores the project | Failed with missing deleted node tombstones as expected | ✓ |
+| Chat history project-delete GREEN | `npm run test:chat-history-sync` after fix | Local delete persists and stale remote merge does not restore the project | Passed | ✓ |
+| Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
+| Production build | `npm run build` | App builds successfully after project-delete sync fix | Passed | ✓ |

@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../store';
-import { SendHorizontal, Folder, Trash2 } from 'lucide-react';
+import { SendHorizontal, Folder, Trash2, TriangleAlert } from 'lucide-react';
 import clsx from 'clsx';
 
 export default function ProjectList() {
   const { projects, activeProjectId, createProject, setActiveProject, deleteProject } = useAppStore();
   const [newTitle, setNewTitle] = useState('');
+  const [pendingDeleteProjectId, setPendingDeleteProjectId] = useState<string | null>(null);
   const projectList = Object.values(projects);
+  const pendingDeleteProject = pendingDeleteProjectId ? projects[pendingDeleteProjectId] : null;
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -16,8 +18,27 @@ export default function ProjectList() {
     }
   };
 
+  useEffect(() => {
+    if (!pendingDeleteProjectId) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setPendingDeleteProjectId(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [pendingDeleteProjectId]);
+
+  const handleConfirmDelete = () => {
+    if (!pendingDeleteProject) {
+      setPendingDeleteProjectId(null);
+      return;
+    }
+    deleteProject(pendingDeleteProject.project_id);
+    setPendingDeleteProjectId(null);
+  };
+
   return (
-    <div className="flex flex-col h-full bg-zinc-50">
+    <div className="relative flex flex-col h-full bg-zinc-50">
       <div className="px-4 py-3 font-semibold text-zinc-800 border-b border-zinc-200 flex items-center gap-2">
         <Folder size={18} />
         Projects
@@ -50,7 +71,7 @@ export default function ProjectList() {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  deleteProject(project.project_id);
+                  setPendingDeleteProjectId(project.project_id);
                 }}
                 className={clsx(
                   "p-1 rounded-md transition-opacity",
@@ -91,6 +112,51 @@ export default function ProjectList() {
           </button>
         </form>
       </div>
+
+      {pendingDeleteProject && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/16 px-4 backdrop-blur-[1px]"
+          onClick={() => setPendingDeleteProjectId(null)}
+        >
+          <div
+            className="w-full max-w-[420px] overflow-hidden rounded-[1.5rem] border border-zinc-300/80 bg-white text-zinc-900 shadow-[0_18px_36px_rgba(15,23,42,0.14)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 pb-6 pt-5">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
+                  <TriangleAlert size={16} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-[1.45rem] font-medium tracking-[-0.03em] text-zinc-950">
+                    Delete project?
+                  </h3>
+                  <p className="mt-4 text-[0.98rem] leading-7 text-zinc-900">
+                    This will delete “{pendingDeleteProject.title}”.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-7 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteProjectId(null)}
+                  className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-[0.95rem] font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  className="rounded-xl border border-rose-600 bg-rose-600 px-4 py-2.5 text-[0.95rem] font-medium text-white transition-colors hover:bg-rose-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

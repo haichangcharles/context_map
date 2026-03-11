@@ -96,3 +96,35 @@ Replace the current `Fit` affordance with a high-risk delete workflow that reuse
 - Deleting a middle segment should splice the remaining graph back together.
 - If the deleted range includes a branch anchor or other splice point, insert a placeholder node so surviving descendants stay connected without rewriting meaning.
 - The action must be confirm-only and reversible through the existing structure undo stack.
+
+## Follow-up: Delete Project Crash
+
+### Goal
+Prevent the app from crashing with React error `#300` after deleting the currently active project.
+
+### Phases
+- [x] Reproduce from the reported delete-project flow and inspect the runtime error class
+- [x] Trace the hook/render path in project-dependent React components
+- [x] Apply the minimal hook-order-safe fix in the affected component
+- [x] Verify with typecheck/build and document the root cause
+
+### Root Cause
+- `src/components/ConversationStream.tsx` returned early when `project`/`context` became null after `deleteProject`.
+- That early return happened before later `useEffect` hooks in the same component, so deleting the active project changed the number of hooks executed in that render.
+- React surfaces that invariant violation as minified error `#300` in production.
+
+## Follow-up: Deleted Project Reappears
+
+### Goal
+Ensure deleting a project is durable locally and not undone by the next remote chat-history pull.
+
+### Phases
+- [x] Trace delete-project state changes and remote merge path
+- [x] Add a failing regression test for project deletion + stale remote merge
+- [x] Preserve project node tombstones on delete and sync them remotely
+- [x] Filter out fully deleted remote projects during merge and verify
+
+### Root Cause
+- `deleteProject` removed project state locally but discarded the deleted node IDs for that project.
+- The next `pullRemoteChatHistory()` still returned the project's historical messages, and `mergeRecoveredChatStateIntoStore()` had no local tombstones to suppress them.
+- Even after node filtering, `filterRecoveredChatStateByDeletedNodeIds` still preserved empty project shells, so a deleted project title could reappear with no nodes.

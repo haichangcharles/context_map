@@ -58,3 +58,15 @@
 - A focused before/after preview can stay lightweight: a compact simulated graph of the impacted local segment is enough for confirmation without trying to re-render the full React Flow canvas inside the modal.
 - The stronger product requirement turned out to be stricter than that: preview must render the actual candidate context-map structure in-place, not a summary card. That means the map renderer needs a switchable data source (`live` vs `candidate preview`) rather than a separate preview widget.
 - `rearrange` was not supposed to restore data, but it was still coupled to whichever structure the main renderer last considered authoritative. The fix is to make layout read from the currently rendered structure only, while delete commit updates both the committed structure and the natural baseline.
+
+## New Findings: Delete Project React Crash
+- React production error `#300` corresponds to a hook-order invariant failure, which matches components that execute fewer hooks after the active project disappears.
+- `src/components/ConversationStream.tsx` had an early `if (!project || !context) return ...` guard before all hooks were declared.
+- The same component still declared additional `useEffect` hooks later in the file, so deleting the active project changed hook count across renders and crashed the app.
+- `src/components/ContextMap.tsx` also renders an empty-state message, but its guard is placed after its hooks, so it is not the source of this specific crash.
+
+## New Findings: Deleted Project Reappears
+- `deleteProject` removed the project from local state but did not preserve tombstones for the project's deleted node IDs.
+- Remote chat-history pull reconstructs projects from historical messages, so stale remote data can immediately recreate a locally deleted project unless those node IDs are still suppressed locally.
+- `filterRecoveredChatStateByDeletedNodeIds` correctly removed deleted nodes, but it still retained `projects`/`contexts` entries for projects with zero surviving nodes, which allowed an empty restored project shell to reappear.
+- Deleting an entire project needs the same tombstone discipline as deleting selected nodes: preserve deleted node IDs locally and enqueue delete tombstones for remote sync.

@@ -491,33 +491,43 @@ const filterRecoveredChatStateByDeletedNodeIds = (
     ])
   ) as Record<string, string[]>;
 
+  const survivingProjectIds = new Set(
+    Object.values(nodes)
+      .map((node) => node.project_id)
+      .filter(Boolean)
+  );
+
   const projects = Object.fromEntries(
-    Object.entries(recoveredState.projects).map(([projectId, project]) => {
+    Object.entries(recoveredState.projects).flatMap(([projectId, project]) => {
+      if (!survivingProjectIds.has(projectId)) return [];
       const nextRootNodeId =
         (!project.root_node_id || deletedSet.has(project.root_node_id) ? null : project.root_node_id) ||
         mainlines[projectId]?.[0] ||
         Object.values(nodes).find((node) => node.project_id === projectId)?.node_id ||
         null;
-      return [
+      return [[
         projectId,
         {
           ...project,
           root_node_id: nextRootNodeId,
         },
-      ];
+      ]];
     })
   ) as Record<string, Project>;
 
   const contexts = Object.fromEntries(
-    Object.entries(recoveredState.contexts).map(([contextId, context]) => [
-      contextId,
-      {
-        ...context,
-        base_path: context.base_path === 'mainline' || branches[context.base_path] ? context.base_path : 'mainline',
-        included_nodes: context.included_nodes.filter((nodeId) => !!nodes[nodeId]),
-        excluded_nodes: context.excluded_nodes.filter((nodeId) => !!nodes[nodeId]),
-      },
-    ])
+    Object.entries(recoveredState.contexts).flatMap(([contextId, context]) => {
+      if (!survivingProjectIds.has(context.project_id)) return [];
+      return [[
+        contextId,
+        {
+          ...context,
+          base_path: context.base_path === 'mainline' || branches[context.base_path] ? context.base_path : 'mainline',
+          included_nodes: context.included_nodes.filter((nodeId) => !!nodes[nodeId]),
+          excluded_nodes: context.excluded_nodes.filter((nodeId) => !!nodes[nodeId]),
+        },
+      ]];
+    })
   ) as Record<string, ContextView>;
 
   return {
@@ -956,6 +966,11 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   },
 
   deleteProject: (projectId) => {
+    const stateBeforeDelete = get();
+    const deletedNodes = Object.values(stateBeforeDelete.nodes).filter((node) => node.project_id === projectId);
+    const deletedNodeIds = deletedNodes.map((node) => node.node_id);
+    const projectTitle = stateBeforeDelete.projects[projectId]?.title ?? null;
+
     set((state) => {
       const { [projectId]: _, ...restProjects } = state.projects;
       const { [projectId]: __, ...restMainlines } = state.mainlines;
@@ -975,11 +990,13 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
         branches: newBranches,
         naturalBranches: newNaturalBranches,
         contexts: newContexts,
-        deletedNodeIds: state.deletedNodeIds.filter((nodeId) => newNodes[nodeId]),
+        deletedNodeIds: Array.from(new Set([...state.deletedNodeIds, ...deletedNodeIds])),
         selectedNodeIds: state.selectedNodeIds.filter((nodeId) => newNodes[nodeId]),
         activeProjectId: state.activeProjectId === projectId ? null : state.activeProjectId,
       };
     });
+
+    void logDeletedChatNodes(deletedNodes, { projectTitle });
   },
 
   addNode: (projectId, parentId, role, content, branchId) => {
