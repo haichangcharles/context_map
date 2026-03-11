@@ -7,17 +7,31 @@ import clsx from 'clsx';
 import { detectStructureSuggestion, extractPatternByType, generateResponseStream, generateMainlineSummary } from '../services/gemini';
 import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { flushChatHistoryQueue, logChatNode } from '../services/chatHistory';
+import {
+  logStructureSuggestionFeedbackEvent,
+  type StructureSuggestionKind,
+} from '../services/structureSuggestionFeedback';
 import { buildInlineSuggestions, clampInlineSuggestionIndex } from '../utils/inlineSuggestions';
 import { buildConversationSystemPrompt } from '../utils/promptBuilders';
+
+type SuggestionFeedbackContext = {
+  projectId: string;
+  currentTLDR: string;
+  historyLast3QA: QAPair[];
+  currentNode: QAPair;
+};
 
 type PendingBranchSuggestion = {
   anchorNodeId: string;
   reason: string;
   nodeIdsToMove: string[];
   originBasePath: string;
+  feedbackContext: SuggestionFeedbackContext;
   assetAction?: 'none' | 'extract_reasoning' | 'extract_task_sop';
   assetReason?: string;
   sourceNodeIds?: string[];
+  assetSuggestionId?: string;
+  assetShownAt?: string;
 };
 
 type InlineNotice = {
@@ -34,7 +48,15 @@ type PendingStructureSuggestion = {
   reason: string;
   assetReason: string;
   sourceNodeIds: string[];
+  feedbackContext: SuggestionFeedbackContext;
+  returnSuggestionId?: string;
+  returnShownAt?: string;
+  extractSuggestionId?: string;
+  extractShownAt?: string;
+  extractOriginKind?: 'structure' | 'branch_extract';
 };
+
+const createSuggestionId = () => `suggestion-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 const PATTERN_TYPE_ORDER: PatternType[] = ['reasoning', 'task_sop', 'context_case'];
 const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
@@ -299,6 +321,24 @@ export default function ConversationStream() {
     if (!pendingBranchSuggestion) return;
     if (!context) return;
     if (context.base_path !== pendingBranchSuggestion.originBasePath) {
+      if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none' && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
+        logSuggestionEvent(
+          pendingBranchSuggestion.assetAction,
+          'expired',
+          pendingBranchSuggestion.assetSuggestionId,
+          pendingBranchSuggestion.assetShownAt,
+          pendingBranchSuggestion.feedbackContext,
+          {
+            targetNodeId: pendingBranchSuggestion.nodeIdsToMove[1] || null,
+            basePath: pendingBranchSuggestion.originBasePath,
+            originKind: 'branch_extract',
+            suggestionPayload: {
+              reason: pendingBranchSuggestion.assetReason || '',
+              sourceNodeIds: pendingBranchSuggestion.sourceNodeIds || [],
+            },
+          }
+        );
+      }
       setPendingBranchSuggestion(null);
     }
   }, [context?.base_path, pendingBranchSuggestion]);
@@ -307,6 +347,41 @@ export default function ConversationStream() {
     if (!pendingStructureSuggestion) return;
     if (!context) return;
     if (context.base_path !== pendingStructureSuggestion.originBasePath) {
+      if (pendingStructureSuggestion.primaryAction === 'return_parent' && pendingStructureSuggestion.returnSuggestionId && pendingStructureSuggestion.returnShownAt) {
+        logSuggestionEvent(
+          'return_parent',
+          'expired',
+          pendingStructureSuggestion.returnSuggestionId,
+          pendingStructureSuggestion.returnShownAt,
+          pendingStructureSuggestion.feedbackContext,
+          {
+            targetNodeId: pendingStructureSuggestion.targetNodeId,
+            basePath: pendingStructureSuggestion.originBasePath,
+            suggestionPayload: {
+              reason: pendingStructureSuggestion.reason,
+              sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+            },
+          }
+        );
+      }
+      if (pendingStructureSuggestion.assetAction !== 'none' && pendingStructureSuggestion.extractSuggestionId && pendingStructureSuggestion.extractShownAt) {
+        logSuggestionEvent(
+          pendingStructureSuggestion.assetAction,
+          'expired',
+          pendingStructureSuggestion.extractSuggestionId,
+          pendingStructureSuggestion.extractShownAt,
+          pendingStructureSuggestion.feedbackContext,
+          {
+            targetNodeId: pendingStructureSuggestion.targetNodeId,
+            basePath: pendingStructureSuggestion.originBasePath,
+            originKind: pendingStructureSuggestion.extractOriginKind || 'structure',
+            suggestionPayload: {
+              reason: pendingStructureSuggestion.assetReason,
+              sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+            },
+          }
+        );
+      }
       setPendingStructureSuggestion(null);
     }
   }, [context?.base_path, pendingStructureSuggestion]);
@@ -408,6 +483,86 @@ export default function ConversationStream() {
   const patternAppendix = buildPatternAppendix(enabledPatternMap, patterns);
   const selectedNodeIdSet = new Set(selectedNodeIds);
 
+  const buildSuggestionFeedbackContext = (userNode?: Node | null, assistantNode?: Node | null): SuggestionFeedbackContext => {
+    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
+    const currentTLDR = !isMainline && currentBranch
+      ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
+      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+
+    return {
+      projectId: project.project_id,
+      currentTLDR,
+      historyLast3QA: historyPairs,
+      currentNode: buildQAPair(userNode, assistantNode),
+    };
+  };
+
+  const logSuggestionEvent = (
+    kind: StructureSuggestionKind,
+    decision: 'shown' | 'accepted' | 'rejected' | 'ignored' | 'expired',
+    suggestionId: string,
+    shownAt: string,
+    feedbackContext: SuggestionFeedbackContext,
+    options?: {
+      targetNodeId?: string | null;
+      basePath?: string | null;
+      originKind?: 'structure' | 'branch_extract';
+      suggestionPayload?: Record<string, unknown>;
+      decidedAt?: string | null;
+    }
+  ) => {
+    logStructureSuggestionFeedbackEvent({
+      suggestion_id: suggestionId,
+      project_id: feedbackContext.projectId,
+      base_path: options?.basePath ?? context?.base_path ?? null,
+      target_node_id: options?.targetNodeId ?? null,
+      suggestion_kind: kind,
+      origin_kind: options?.originKind ?? 'structure',
+      decision,
+      current_tldr: feedbackContext.currentTLDR,
+      history_last_3_qa: feedbackContext.historyLast3QA,
+      current_node: feedbackContext.currentNode,
+      suggestion_payload: options?.suggestionPayload || {},
+      shown_at: shownAt,
+      decided_at: decision === 'shown' ? null : (options?.decidedAt ?? new Date().toISOString()),
+    });
+  };
+
+  const clearBranchExtractSuggestion = (
+    decision: 'accepted' | 'rejected' | 'ignored' | 'expired'
+  ) => {
+    setPendingBranchSuggestion((current) => {
+      if (!current || !current.assetAction || current.assetAction === 'none' || !current.assetSuggestionId || !current.assetShownAt) {
+        return current;
+      }
+
+      logSuggestionEvent(
+        current.assetAction,
+        decision,
+        current.assetSuggestionId,
+        current.assetShownAt,
+        current.feedbackContext,
+        {
+          targetNodeId: current.nodeIdsToMove[1] || null,
+          basePath: current.originBasePath,
+          originKind: 'branch_extract',
+          suggestionPayload: {
+            reason: current.assetReason || '',
+            sourceNodeIds: current.sourceNodeIds || [],
+          },
+        }
+      );
+
+      return {
+        ...current,
+        assetAction: 'none',
+        assetReason: '',
+        assetSuggestionId: undefined,
+        assetShownAt: undefined,
+      };
+    });
+  };
+
   useEffect(() => {
     setPatternPage((prev) => Math.min(prev, Math.max(0, totalPatternPages - 1)));
   }, [totalPatternPages]);
@@ -480,10 +635,63 @@ export default function ConversationStream() {
         userBehaviour: 'same_thread',
         level: ignoreLevel,
       });
+      if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none' && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
+        logSuggestionEvent(
+          pendingBranchSuggestion.assetAction,
+          'ignored',
+          pendingBranchSuggestion.assetSuggestionId,
+          pendingBranchSuggestion.assetShownAt,
+          pendingBranchSuggestion.feedbackContext,
+          {
+            targetNodeId: pendingBranchSuggestion.nodeIdsToMove[1] || null,
+            basePath: pendingBranchSuggestion.originBasePath,
+            originKind: 'branch_extract',
+            suggestionPayload: {
+              reason: pendingBranchSuggestion.assetReason || '',
+              sourceNodeIds: pendingBranchSuggestion.sourceNodeIds || [],
+            },
+          }
+        );
+      }
       setPendingBranchSuggestion(null);
     }
 
     if (pendingStructureSuggestion) {
+      if (pendingStructureSuggestion.primaryAction === 'return_parent' && pendingStructureSuggestion.returnSuggestionId && pendingStructureSuggestion.returnShownAt) {
+        logSuggestionEvent(
+          'return_parent',
+          'ignored',
+          pendingStructureSuggestion.returnSuggestionId,
+          pendingStructureSuggestion.returnShownAt,
+          pendingStructureSuggestion.feedbackContext,
+          {
+            targetNodeId: pendingStructureSuggestion.targetNodeId,
+            basePath: pendingStructureSuggestion.originBasePath,
+            suggestionPayload: {
+              reason: pendingStructureSuggestion.reason,
+              sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+            },
+          }
+        );
+      }
+      if (pendingStructureSuggestion.assetAction !== 'none' && pendingStructureSuggestion.extractSuggestionId && pendingStructureSuggestion.extractShownAt) {
+        logSuggestionEvent(
+          pendingStructureSuggestion.assetAction,
+          'ignored',
+          pendingStructureSuggestion.extractSuggestionId,
+          pendingStructureSuggestion.extractShownAt,
+          pendingStructureSuggestion.feedbackContext,
+          {
+            targetNodeId: pendingStructureSuggestion.targetNodeId,
+            basePath: pendingStructureSuggestion.originBasePath,
+            originKind: pendingStructureSuggestion.extractOriginKind || 'structure',
+            suggestionPayload: {
+              reason: pendingStructureSuggestion.assetReason,
+              sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+            },
+          }
+        );
+      }
       setPendingStructureSuggestion(null);
     }
 
@@ -707,15 +915,49 @@ export default function ConversationStream() {
         const activeContextId = state.projects[project.project_id]?.active_context_id;
         const activeContext = activeContextId ? state.contexts[activeContextId] : null;
         if (activeContext?.base_path === (liveContext?.base_path ?? 'mainline')) {
+          const feedbackContext = buildSuggestionFeedbackContext(
+            state.nodes[userNodeId],
+            state.nodes[assistantNodeId]
+          );
+          const branchExtractShownAt =
+            structureDecision.assetAction && structureDecision.assetAction !== 'none'
+              ? new Date().toISOString()
+              : undefined;
+          const branchExtractSuggestionId =
+            structureDecision.assetAction && structureDecision.assetAction !== 'none'
+              ? createSuggestionId()
+              : undefined;
+          if (structureDecision.assetAction && structureDecision.assetAction !== 'none' && branchExtractSuggestionId && branchExtractShownAt) {
+            logSuggestionEvent(
+              structureDecision.assetAction,
+              'shown',
+              branchExtractSuggestionId,
+              branchExtractShownAt,
+              feedbackContext,
+              {
+                targetNodeId: assistantNodeId,
+                basePath: activeContext.base_path,
+                originKind: 'branch_extract',
+                suggestionPayload: {
+                  reason: structureDecision.assetReason || '',
+                  sourceNodeIds: liveVisibleNodes.map((node) => node.node_id).concat([userNodeId, assistantNodeId]),
+                },
+                decidedAt: null,
+              }
+            );
+          }
           logBranchDebug('suggestion-pre-snapshot', buildSuggestionSnapshot());
           setPendingBranchSuggestion({
             anchorNodeId: parentId,
             reason: structureDecision.reason || 'This looks like a temporary or off-topic subtask.',
             nodeIdsToMove: [userNodeId, assistantNodeId],
             originBasePath: activeContext.base_path,
+            feedbackContext,
             assetAction: structureDecision.assetAction,
             assetReason: structureDecision.assetReason,
             sourceNodeIds: liveVisibleNodes.map((node) => node.node_id).concat([userNodeId, assistantNodeId]),
+            assetSuggestionId: branchExtractSuggestionId,
+            assetShownAt: branchExtractShownAt,
           });
           logBranchDebug('suggestion-created', {
             anchorNodeId: parentId,
@@ -738,6 +980,52 @@ export default function ConversationStream() {
         const activeContextId = state.projects[project.project_id]?.active_context_id;
         const activeContext = activeContextId ? state.contexts[activeContextId] : null;
         if (activeContext?.base_path === liveContext.base_path) {
+          const feedbackContext = buildSuggestionFeedbackContext(
+            state.nodes[userNodeId],
+            state.nodes[assistantNodeId]
+          );
+          const shownAt = new Date().toISOString();
+          const returnSuggestionId =
+            structureDecision.primaryAction === 'return_parent' ? createSuggestionId() : undefined;
+          const extractSuggestionId =
+            structureDecision.assetAction !== 'none' ? createSuggestionId() : undefined;
+
+          if (returnSuggestionId) {
+            logSuggestionEvent(
+              'return_parent',
+              'shown',
+              returnSuggestionId,
+              shownAt,
+              feedbackContext,
+              {
+                targetNodeId: assistantNodeId,
+                basePath: activeContext.base_path,
+                suggestionPayload: {
+                  reason: structureDecision.reason,
+                  sourceNodeIds: liveVisibleNodes.map((node) => node.node_id).concat([userNodeId, assistantNodeId]),
+                },
+                decidedAt: null,
+              }
+            );
+          }
+          if (extractSuggestionId) {
+            logSuggestionEvent(
+              structureDecision.assetAction,
+              'shown',
+              extractSuggestionId,
+              shownAt,
+              feedbackContext,
+              {
+                targetNodeId: assistantNodeId,
+                basePath: activeContext.base_path,
+                suggestionPayload: {
+                  reason: structureDecision.assetReason,
+                  sourceNodeIds: liveVisibleNodes.map((node) => node.node_id).concat([userNodeId, assistantNodeId]),
+                },
+                decidedAt: null,
+              }
+            );
+          }
           setPendingStructureSuggestion({
             targetNodeId: assistantNodeId,
             originBasePath: activeContext.base_path,
@@ -746,6 +1034,12 @@ export default function ConversationStream() {
             reason: structureDecision.reason,
             assetReason: structureDecision.assetReason,
             sourceNodeIds: liveVisibleNodes.map((node) => node.node_id).concat([userNodeId, assistantNodeId]),
+            feedbackContext,
+            returnSuggestionId,
+            returnShownAt: returnSuggestionId ? shownAt : undefined,
+            extractSuggestionId,
+            extractShownAt: extractSuggestionId ? shownAt : undefined,
+            extractOriginKind: extractSuggestionId ? 'structure' : undefined,
           });
         }
       }
@@ -810,6 +1104,24 @@ export default function ConversationStream() {
       movedAssistantNow.parent_id === movedUserNow.node_id;
 
     if (!isSuggestionStillValid) {
+      if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none' && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
+        logSuggestionEvent(
+          pendingBranchSuggestion.assetAction,
+          'expired',
+          pendingBranchSuggestion.assetSuggestionId,
+          pendingBranchSuggestion.assetShownAt,
+          pendingBranchSuggestion.feedbackContext,
+          {
+            targetNodeId: assistantNodeId,
+            basePath: pendingBranchSuggestion.originBasePath,
+            originKind: 'branch_extract',
+            suggestionPayload: {
+              reason: pendingBranchSuggestion.assetReason || '',
+              sourceNodeIds: pendingBranchSuggestion.sourceNodeIds || [],
+            },
+          }
+        );
+      }
       setPendingBranchSuggestion(null);
       setBranchSuggestionNotice('Branch suggestion expired. Please regenerate.');
       return;
@@ -847,6 +1159,24 @@ export default function ConversationStream() {
         projectId: project.project_id,
         anchorNodeId: pendingBranchSuggestion.anchorNodeId,
       });
+      if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none' && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
+        logSuggestionEvent(
+          pendingBranchSuggestion.assetAction,
+          'expired',
+          pendingBranchSuggestion.assetSuggestionId,
+          pendingBranchSuggestion.assetShownAt,
+          pendingBranchSuggestion.feedbackContext,
+          {
+            targetNodeId: assistantNodeId,
+            basePath: pendingBranchSuggestion.originBasePath,
+            originKind: 'branch_extract',
+            suggestionPayload: {
+              reason: pendingBranchSuggestion.assetReason || '',
+              sourceNodeIds: pendingBranchSuggestion.sourceNodeIds || [],
+            },
+          }
+        );
+      }
       setBranchSuggestionNotice('Branch suggestion is stale. Please regenerate.');
     } else {
       setPendingBranchFeedback(createdBranchId, acceptSample);
@@ -861,6 +1191,10 @@ export default function ConversationStream() {
           sourceNodeIds:
             pendingBranchSuggestion.sourceNodeIds ||
             [userNodeId, assistantNodeId],
+          feedbackContext: pendingBranchSuggestion.feedbackContext,
+          extractSuggestionId: pendingBranchSuggestion.assetSuggestionId,
+          extractShownAt: pendingBranchSuggestion.assetShownAt,
+          extractOriginKind: 'branch_extract',
         });
       }
     }
@@ -891,19 +1225,77 @@ export default function ConversationStream() {
       userBehaviour: 'same_thread',
       level: rejectLevel,
     });
+    if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none' && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
+      logSuggestionEvent(
+        pendingBranchSuggestion.assetAction,
+        'rejected',
+        pendingBranchSuggestion.assetSuggestionId,
+        pendingBranchSuggestion.assetShownAt,
+        pendingBranchSuggestion.feedbackContext,
+        {
+          targetNodeId: pendingBranchSuggestion.nodeIdsToMove[1] || null,
+          basePath: pendingBranchSuggestion.originBasePath,
+          originKind: 'branch_extract',
+          suggestionPayload: {
+            reason: pendingBranchSuggestion.assetReason || '',
+            sourceNodeIds: pendingBranchSuggestion.sourceNodeIds || [],
+          },
+        }
+      );
+    }
     setPendingBranchSuggestion(null);
   };
 
   const handleDismissStructureSuggestion = () => {
     if (structureActionInFlight) return;
+    if (pendingStructureSuggestion?.primaryAction === 'return_parent' && pendingStructureSuggestion.returnSuggestionId && pendingStructureSuggestion.returnShownAt) {
+      logSuggestionEvent(
+        'return_parent',
+        'rejected',
+        pendingStructureSuggestion.returnSuggestionId,
+        pendingStructureSuggestion.returnShownAt,
+        pendingStructureSuggestion.feedbackContext,
+        {
+          targetNodeId: pendingStructureSuggestion.targetNodeId,
+          basePath: pendingStructureSuggestion.originBasePath,
+          suggestionPayload: {
+            reason: pendingStructureSuggestion.reason,
+            sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+          },
+        }
+      );
+    }
+    if (pendingStructureSuggestion?.assetAction !== 'none' && pendingStructureSuggestion.extractSuggestionId && pendingStructureSuggestion.extractShownAt) {
+      logSuggestionEvent(
+        pendingStructureSuggestion.assetAction,
+        'rejected',
+        pendingStructureSuggestion.extractSuggestionId,
+        pendingStructureSuggestion.extractShownAt,
+        pendingStructureSuggestion.feedbackContext,
+        {
+          targetNodeId: pendingStructureSuggestion.targetNodeId,
+          basePath: pendingStructureSuggestion.originBasePath,
+          originKind: pendingStructureSuggestion.extractOriginKind || 'structure',
+          suggestionPayload: {
+            reason: pendingStructureSuggestion.assetReason,
+            sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+          },
+        }
+      );
+    }
     setPendingStructureSuggestion(null);
+  };
+
+  const handleDismissBranchExtractSuggestion = () => {
+    if (structureActionInFlight) return;
+    clearBranchExtractSuggestion('rejected');
   };
 
   const extractSuggestedPattern = async (
     assetAction: 'extract_reasoning' | 'extract_task_sop',
     sourceNodeIds: string[],
     preserveReturnAction = false
-  ) => {
+  ): Promise<boolean> => {
     setStructureActionInFlight('extract');
     const selectedNodes = sourceNodeIds
       .map((nodeId) => nodes[nodeId])
@@ -913,7 +1305,7 @@ export default function ConversationStream() {
       setPendingStructureSuggestion(null);
       setPendingBranchSuggestion(null);
       setStructureActionInFlight(null);
-      return;
+      return false;
     }
 
     try {
@@ -956,6 +1348,7 @@ export default function ConversationStream() {
         }
         return null;
       });
+      return true;
     } catch (error) {
       console.error(error);
       setInlineNotice({
@@ -965,6 +1358,7 @@ export default function ConversationStream() {
       });
       setPendingStructureSuggestion(null);
       setPendingBranchSuggestion(null);
+      return false;
     } finally {
       setStructureActionInFlight(null);
     }
@@ -982,12 +1376,31 @@ export default function ConversationStream() {
     setStructureActionInFlight('return');
     try {
       returnToParentBranch(project.project_id);
+      if (pendingStructureSuggestion.returnSuggestionId && pendingStructureSuggestion.returnShownAt) {
+        logSuggestionEvent(
+          'return_parent',
+          'accepted',
+          pendingStructureSuggestion.returnSuggestionId,
+          pendingStructureSuggestion.returnShownAt,
+          pendingStructureSuggestion.feedbackContext,
+          {
+            targetNodeId: pendingStructureSuggestion.targetNodeId,
+            basePath: pendingStructureSuggestion.originBasePath,
+            suggestionPayload: {
+              reason: pendingStructureSuggestion.reason,
+              sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+            },
+          }
+        );
+      }
       setPendingStructureSuggestion((current) =>
         current
           ? {
               ...current,
               primaryAction: 'continue',
               reason: '',
+              returnSuggestionId: undefined,
+              returnShownAt: undefined,
             }
           : current
       );
@@ -1005,11 +1418,29 @@ export default function ConversationStream() {
       return;
     }
 
-    await extractSuggestedPattern(
+    const extracted = await extractSuggestedPattern(
       pendingStructureSuggestion.assetAction,
       pendingStructureSuggestion.sourceNodeIds,
       pendingStructureSuggestion.primaryAction === 'return_parent'
     );
+    if (extracted && pendingStructureSuggestion.extractSuggestionId && pendingStructureSuggestion.extractShownAt) {
+      logSuggestionEvent(
+        pendingStructureSuggestion.assetAction,
+        'accepted',
+        pendingStructureSuggestion.extractSuggestionId,
+        pendingStructureSuggestion.extractShownAt,
+        pendingStructureSuggestion.feedbackContext,
+        {
+          targetNodeId: pendingStructureSuggestion.targetNodeId,
+          basePath: pendingStructureSuggestion.originBasePath,
+          originKind: pendingStructureSuggestion.extractOriginKind || 'structure',
+          suggestionPayload: {
+            reason: pendingStructureSuggestion.assetReason,
+            sourceNodeIds: pendingStructureSuggestion.sourceNodeIds,
+          },
+        }
+      );
+    }
   };
 
   const handleAcceptBranchExtractSuggestion = async () => {
@@ -1023,7 +1454,25 @@ export default function ConversationStream() {
       return;
     }
 
-    await extractSuggestedPattern(pendingBranchSuggestion.assetAction, pendingBranchSuggestion.sourceNodeIds);
+    const extracted = await extractSuggestedPattern(pendingBranchSuggestion.assetAction, pendingBranchSuggestion.sourceNodeIds);
+    if (extracted && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
+      logSuggestionEvent(
+        pendingBranchSuggestion.assetAction,
+        'accepted',
+        pendingBranchSuggestion.assetSuggestionId,
+        pendingBranchSuggestion.assetShownAt,
+        pendingBranchSuggestion.feedbackContext,
+        {
+          targetNodeId: pendingBranchSuggestion.nodeIdsToMove[1] || null,
+          basePath: pendingBranchSuggestion.originBasePath,
+          originKind: 'branch_extract',
+          suggestionPayload: {
+            reason: pendingBranchSuggestion.assetReason || '',
+            sourceNodeIds: pendingBranchSuggestion.sourceNodeIds || [],
+          },
+        }
+      );
+    }
   };
 
   const goToPreviousInlineSuggestion = (itemCount: number) => {
@@ -1410,7 +1859,13 @@ export default function ConversationStream() {
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <button
-                            onClick={activeInlineItem.kind === 'branch' ? handleRejectBranchSuggestion : handleDismissStructureSuggestion}
+                            onClick={
+                              activeInlineItem.kind === 'branch'
+                                ? handleRejectBranchSuggestion
+                                : activeInlineItem.kind === 'branch_extract'
+                                  ? handleDismissBranchExtractSuggestion
+                                  : handleDismissStructureSuggestion
+                            }
                             disabled={structureActionInFlight !== null}
                             className="px-3 py-1.5 rounded-md text-xs font-medium text-zinc-700 bg-white border border-zinc-300 hover:bg-zinc-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
@@ -1581,7 +2036,8 @@ export default function ConversationStream() {
           <button
             type="submit"
             disabled={!input.trim() || isLoading}
-            className="absolute right-3 bottom-3 p-2 bg-zinc-900 text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:bg-zinc-300 disabled:text-zinc-600 disabled:cursor-not-allowed"
+            className="absolute right-3 bottom-3 p-2 rounded-lg transition-colors disabled:cursor-not-allowed"
+            style={input.trim() && !isLoading ? { backgroundColor: '#18181b', color: '#fff' } : { backgroundColor: '#d4d4d8', color: '#52525b' }}
           >
             <Send size={18} />
           </button>

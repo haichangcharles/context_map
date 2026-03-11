@@ -1,12 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store';
-import { SendHorizontal, Folder, Trash2, TriangleAlert } from 'lucide-react';
+import { SendHorizontal, Folder, Trash2, TriangleAlert, Pencil, MoreHorizontal } from 'lucide-react';
 import clsx from 'clsx';
 
 export default function ProjectList() {
-  const { projects, activeProjectId, createProject, setActiveProject, deleteProject } = useAppStore();
+  const { projects, activeProjectId, createProject, setActiveProject, renameProject, deleteProject } = useAppStore();
   const [newTitle, setNewTitle] = useState('');
   const [pendingDeleteProjectId, setPendingDeleteProjectId] = useState<string | null>(null);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [menuOpenProjectId, setMenuOpenProjectId] = useState<string | null>(null);
+  const editInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const projectList = Object.values(projects);
   const pendingDeleteProject = pendingDeleteProjectId ? projects[pendingDeleteProjectId] : null;
 
@@ -17,6 +22,45 @@ export default function ProjectList() {
       setNewTitle('');
     }
   };
+
+  const startEditing = (projectId: string, currentTitle: string) => {
+    setMenuOpenProjectId(null);
+    setEditingProjectId(projectId);
+    setEditingTitle(currentTitle);
+  };
+
+  const commitRename = () => {
+    if (!editingProjectId) return;
+    const trimmed = editingTitle.trim();
+    if (trimmed && trimmed !== projects[editingProjectId]?.title) {
+      renameProject(editingProjectId, trimmed);
+    }
+    setEditingProjectId(null);
+    setEditingTitle('');
+  };
+
+  const cancelEditing = () => {
+    setEditingProjectId(null);
+    setEditingTitle('');
+  };
+
+  useEffect(() => {
+    if (editingProjectId && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingProjectId]);
+
+  useEffect(() => {
+    if (!menuOpenProjectId) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as HTMLElement)) {
+        setMenuOpenProjectId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpenProjectId]);
 
   useEffect(() => {
     if (!pendingDeleteProjectId) return;
@@ -45,47 +89,116 @@ export default function ProjectList() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
-        {projectList.map((project) => (
-          <div
-            key={project.project_id}
-            role="button"
-            tabIndex={0}
-            className={clsx(
-              "w-full text-left flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer group transition-all border focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30",
-              activeProjectId === project.project_id
-                ? "bg-zinc-900 text-white border-zinc-900 shadow-sm"
-                : "bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-100 hover:border-zinc-300"
-            )}
-            onClick={() => setActiveProject(project.project_id)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                setActiveProject(project.project_id);
-              }
-            }}
-            title={project.title}
-          >
-            <span className="truncate text-sm font-medium">{project.title}</span>
-            <span className="flex items-center pl-2">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPendingDeleteProjectId(project.project_id);
-                }}
-                className={clsx(
-                  "p-1 rounded-md transition-opacity",
-                  activeProjectId === project.project_id
-                    ? "opacity-70 hover:opacity-100 text-white/80 hover:text-red-300"
-                    : "opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500"
-                )}
-                title="Delete Project"
-              >
-                <Trash2 size={14} />
-              </button>
-            </span>
-          </div>
-        ))}
+        {projectList.map((project) => {
+          const isActive = activeProjectId === project.project_id;
+          const isEditing = editingProjectId === project.project_id;
+          const isMenuOpen = menuOpenProjectId === project.project_id;
+
+          return (
+            <div
+              key={project.project_id}
+              role="button"
+              tabIndex={0}
+              className={clsx(
+                "relative w-full text-left flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer group transition-all border focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30",
+                isActive
+                  ? "bg-zinc-900 text-white border-zinc-900 shadow-sm"
+                  : "bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-100 hover:border-zinc-300"
+              )}
+              onClick={() => {
+                if (!isEditing) setActiveProject(project.project_id);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (!isEditing) setActiveProject(project.project_id);
+                }
+              }}
+              title={isEditing ? undefined : project.title}
+            >
+              {isEditing ? (
+                <input
+                  ref={editInputRef}
+                  type="text"
+                  value={editingTitle}
+                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitRename();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      cancelEditing();
+                    }
+                    e.stopPropagation();
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className={clsx(
+                    "w-full text-sm font-medium bg-transparent border-b outline-none py-0",
+                    isActive
+                      ? "text-white border-white/50 placeholder-white/40"
+                      : "text-zinc-700 border-zinc-400 placeholder-zinc-400"
+                  )}
+                />
+              ) : (
+                <span className="truncate text-sm font-medium">{project.title}</span>
+              )}
+
+              {!isEditing && (
+                <div className="relative flex items-center pl-2" ref={isMenuOpen ? menuRef : undefined}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuOpenProjectId(isMenuOpen ? null : project.project_id);
+                    }}
+                    className={clsx(
+                      "p-1 rounded-md transition-opacity",
+                      isActive
+                        ? "opacity-70 hover:opacity-100 text-white/80 hover:text-white"
+                        : "opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-zinc-600",
+                      isMenuOpen && "!opacity-100"
+                    )}
+                    title="Options"
+                  >
+                    <MoreHorizontal size={16} />
+                  </button>
+
+                  {isMenuOpen && (
+                    <div
+                      className="absolute right-0 top-full mt-1 z-50 w-40 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10"
+                      style={{ color: '#18181b' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2.5 px-3 py-2 text-sm hover:bg-zinc-100 transition-colors"
+                        style={{ color: '#18181b' }}
+                        onClick={() => startEditing(project.project_id, project.title)}
+                      >
+                        <Pencil size={14} style={{ color: '#18181b' }} />
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2.5 px-3 py-2 text-sm hover:bg-red-50 transition-colors"
+                        style={{ color: '#dc2626' }}
+                        onClick={() => {
+                          setMenuOpenProjectId(null);
+                          setPendingDeleteProjectId(project.project_id);
+                        }}
+                      >
+                        <Trash2 size={14} style={{ color: '#dc2626' }} />
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
         {projectList.length === 0 && (
           <div className="text-sm text-zinc-400 text-center py-6 px-3 rounded-xl bg-white border border-zinc-200">
             No projects yet
@@ -105,7 +218,8 @@ export default function ProjectList() {
           <button
             type="submit"
             disabled={!newTitle.trim()}
-            className="h-11 w-11 shrink-0 flex items-center justify-center bg-zinc-900 text-white rounded-lg transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-600 disabled:cursor-not-allowed"
+            className="h-11 w-11 shrink-0 flex items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed"
+            style={newTitle.trim() ? { backgroundColor: '#18181b', color: '#fff' } : { backgroundColor: '#d4d4d8', color: '#52525b' }}
             title="Create Project"
           >
             <SendHorizontal size={18} />
@@ -132,7 +246,7 @@ export default function ProjectList() {
                     Delete project?
                   </h3>
                   <p className="mt-4 text-[0.98rem] leading-7 text-zinc-900">
-                    This will delete “{pendingDeleteProject.title}”.
+                    This will delete &ldquo;{pendingDeleteProject.title}&rdquo;.
                   </p>
                 </div>
               </div>

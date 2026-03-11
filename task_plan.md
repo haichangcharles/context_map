@@ -128,3 +128,45 @@ Ensure deleting a project is durable locally and not undone by the next remote c
 - `deleteProject` removed project state locally but discarded the deleted node IDs for that project.
 - The next `pullRemoteChatHistory()` still returned the project's historical messages, and `mergeRecoveredChatStateIntoStore()` had no local tombstones to suppress them.
 - Even after node filtering, `filterRecoveredChatStateByDeletedNodeIds` still preserved empty project shells, so a deleted project title could reappear with no nodes.
+
+## Follow-up: Sync Branch Feedback
+
+### Goal
+Persist branch feedback samples to Supabase so feedback collected in Vercel deployments can be recovered across browsers/devices instead of staying only in browser localStorage.
+
+### Phases
+- [x] Trace current branch-feedback local flow and reuse points from chat/pattern sync
+- [x] Add failing regression tests for branch-feedback remote push/pull and merge semantics
+- [x] Implement branch-feedback sync runtime, app wiring, and manage visibility
+- [x] Verify targeted tests, lint/build, and document the required Supabase table
+
+### Constraints
+- Keep branch feedback local-first when Supabase env vars are absent.
+- Preserve current dataset/stat APIs so existing suggestion logic does not need to be rewritten.
+- Use stable sample IDs so remote pulls merge without duplicating local samples.
+
+### Fix Summary
+- Added append-only branch-feedback sync with a dedicated Supabase table (`branch_feedback`) keyed by `sample_id`.
+- Kept the existing local dataset format and stats logic intact; remote pulls now merge back into the same per-user localStorage dataset.
+- Wired branch-feedback sync into app startup, user confirmation, online/visibility refresh, and the `/manage` diagnostics panel.
+
+## Follow-up: Sync Structure Suggestions
+
+### Goal
+Persist non-branch AI suggestion interactions (`return_parent`, `extract_reasoning`, `extract_task_sop`) so all structure-suggestion decisions can be recovered and analyzed across browsers/devices.
+
+### Phases
+- [x] Trace structure-suggestion show/accept/dismiss/ignore/expire paths
+- [x] Add failing regression tests for structure-suggestion feedback sync and deduping
+- [x] Implement a dedicated sync service and wire `ConversationStream` decision logging
+- [x] Verify tests, lint/build, and document the new Supabase table SQL
+
+### Constraints
+- Keep branch suggestion feedback on the existing `branch_feedback` path.
+- Log append-only decision events with a stable `suggestion_id` so lifecycle analysis remains possible.
+- Capture both structure-only suggestions and branch-attached extract suggestions.
+
+### Fix Summary
+- Added a dedicated `structure_suggestion_feedback` sync service with append-only events keyed by `event_id` and grouped by `suggestion_id`.
+- Wired `ConversationStream` to log `shown`, `accepted`, `rejected`, `ignored`, and `expired` decisions for `return_parent`, `extract_reasoning`, and `extract_task_sop`.
+- Preserved the existing branch-feedback dataset path while adding separate analytics for non-branch AI suggestions, including branch-attached extract suggestions.

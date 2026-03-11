@@ -10,9 +10,20 @@ import ManagePanel from './components/ManagePanel';
 import { useState, useEffect } from 'react';
 import { PanelRightClose, PanelRightOpen, Maximize2, Minimize2 } from 'lucide-react';
 import clsx from 'clsx';
-import { getActiveUserId, setActiveUserId } from './utils/branchFeedbackDataset';
+import {
+  getActiveUserId,
+  mergeBranchFeedbackFromRemoteRecords,
+  pullRemoteBranchFeedback,
+  setActiveUserId,
+  startBranchFeedbackSync,
+} from './utils/branchFeedbackDataset';
 import { pullRemoteChatHistory, reconstructChatStateFromRecords, startChatHistorySync } from './services/chatHistory';
 import { pullRemotePatterns, startPatternSync } from './services/patternSync';
+import {
+  mergeStructureSuggestionFeedbackFromRemote,
+  pullRemoteStructureSuggestionFeedback,
+  startStructureSuggestionFeedbackSync,
+} from './services/structureSuggestionFeedback';
 import { mergePatternsFromRemoteRecords, mergeRecoveredChatStateIntoStore, rehydrateStoreForActiveUser } from './store';
 
 export default function App() {
@@ -34,6 +45,18 @@ export default function App() {
     mergePatternsFromRemoteRecords(records);
   };
 
+  const syncBranchFeedbackFromRemote = async () => {
+    const records = await pullRemoteBranchFeedback();
+    if (records.length === 0) return;
+    mergeBranchFeedbackFromRemoteRecords(records);
+  };
+
+  const syncStructureSuggestionFeedbackFromRemote = async () => {
+    const records = await pullRemoteStructureSuggestionFeedback();
+    if (records.length === 0) return;
+    mergeStructureSuggestionFeedbackFromRemote(records);
+  };
+
   const syncChatHistoryFromRemote = async () => {
     const records = await pullRemoteChatHistory();
     if (records.length === 0) return;
@@ -51,9 +74,13 @@ export default function App() {
   useEffect(() => {
     const stopSync = startChatHistorySync();
     const stopPatternSync = startPatternSync();
+    const stopBranchFeedbackSync = startBranchFeedbackSync();
+    const stopStructureSuggestionFeedbackSync = startStructureSuggestionFeedbackSync();
     return () => {
       stopSync();
       stopPatternSync();
+      stopBranchFeedbackSync();
+      stopStructureSuggestionFeedbackSync();
     };
   }, []);
 
@@ -95,6 +122,8 @@ export default function App() {
     await rehydrateStoreForActiveUser();
     await syncChatHistoryFromRemote();
     await syncPatternsFromRemote();
+    await syncBranchFeedbackFromRemote();
+    await syncStructureSuggestionFeedbackFromRemote();
     setActiveUserIdState(normalized);
   };
 
@@ -103,16 +132,22 @@ export default function App() {
 
     void syncChatHistoryFromRemote();
     void syncPatternsFromRemote();
+    void syncBranchFeedbackFromRemote();
+    void syncStructureSuggestionFeedbackFromRemote();
 
     const onOnline = () => {
       void syncChatHistoryFromRemote();
       void syncPatternsFromRemote();
+      void syncBranchFeedbackFromRemote();
+      void syncStructureSuggestionFeedbackFromRemote();
     };
 
     const onVisible = () => {
       if (typeof document !== 'undefined' && !document.hidden) {
         void syncChatHistoryFromRemote();
         void syncPatternsFromRemote();
+        void syncBranchFeedbackFromRemote();
+        void syncStructureSuggestionFeedbackFromRemote();
       }
     };
 
@@ -124,6 +159,8 @@ export default function App() {
     const timer = window.setInterval(() => {
       void syncChatHistoryFromRemote();
       void syncPatternsFromRemote();
+      void syncBranchFeedbackFromRemote();
+      void syncStructureSuggestionFeedbackFromRemote();
     }, 15000);
 
     return () => {
@@ -174,7 +211,8 @@ export default function App() {
           <button
             type="submit"
             disabled={!userIdInput.trim()}
-            className="w-full py-2.5 rounded-xl bg-zinc-900 text-white font-medium hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-600"
+            className="w-full py-2.5 rounded-xl font-medium transition-colors disabled:cursor-not-allowed"
+            style={userIdInput.trim() ? { backgroundColor: '#18181b', color: '#fff' } : { backgroundColor: '#d4d4d8', color: '#52525b' }}
           >
             Continue
           </button>
@@ -223,7 +261,8 @@ export default function App() {
               <button
                 type="submit"
                 disabled={!managePasswordInput.trim()}
-                className="w-full py-2.5 rounded-xl bg-zinc-900 text-white font-medium hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-600"
+                className="w-full py-2.5 rounded-xl font-medium transition-colors disabled:cursor-not-allowed"
+                style={managePasswordInput.trim() ? { backgroundColor: '#18181b', color: '#fff' } : { backgroundColor: '#d4d4d8', color: '#52525b' }}
               >
                 Enter Manage
               </button>

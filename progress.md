@@ -201,3 +201,68 @@
 | Chat history project-delete GREEN | `npm run test:chat-history-sync` after fix | Local delete persists and stale remote merge does not restore the project | Passed | ✓ |
 | Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
 | Production build | `npm run build` | App builds successfully after project-delete sync fix | Passed | ✓ |
+
+## Session: 2026-03-11
+
+### Follow-up Feature: Remote sync for branch feedback
+- **Status:** complete
+- **Started:** 2026-03-11 15:50:17 EDT
+- Actions taken:
+  - Confirmed branch feedback currently records `accept_branch`, `reject_branch`, and `ignore_branch` in localStorage only.
+  - Compared the existing chat-history and pattern sync implementations to decide on a local-first, append-only feedback sync design.
+  - Chose a dedicated branch-feedback sync runtime with stable sample IDs so remote pulls can merge without duplicating local samples.
+  - Added `scripts/test-branch-feedback-sync.ts` and verified the RED step first on the missing `createBranchFeedbackSyncRuntime` export.
+  - Implemented remote branch-feedback queueing, flush, pull, and merge inside `src/utils/branchFeedbackDataset.ts`.
+  - Wired remote branch-feedback pull into `src/App.tsx` and added sync diagnostics to `src/components/ManagePanel.tsx`.
+  - Documented the new Supabase `branch_feedback` table and required anon policies in `README.md`.
+- Files created/modified:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+  - `src/utils/branchFeedbackDataset.ts`
+  - `src/App.tsx`
+  - `src/components/ManagePanel.tsx`
+  - `scripts/test-branch-feedback-sync.ts`
+  - `package.json`
+  - `README.md`
+
+## Test Results (2026-03-11, branch-feedback sync)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Branch feedback sync RED | `npm run test:branch-feedback-sync` before implementation | Fails because sync runtime exports do not exist yet | Failed with missing `createBranchFeedbackSyncRuntime` export as expected | ✓ |
+| Branch feedback sync GREEN | `npm run test:branch-feedback-sync` after implementation | Local append, pending queue flush, remote pull, and deduping merge all pass | Passed | ✓ |
+| Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
+| Production build | `npm run build` | App builds successfully with branch-feedback sync wiring | Passed, with existing chunk-size warning only | ✓ |
+
+### Follow-up Feature: Remote sync for structure suggestions
+- **Status:** complete
+- **Started:** 2026-03-11 16:00:52 EDT
+- Actions taken:
+  - Traced `return_parent`, `structure_extract`, and `branch_extract` decision points in `ConversationStream.tsx`.
+  - Confirmed these suggestions currently have no persistent feedback path, unlike branch suggestions.
+  - Chose a separate append-only event stream keyed by `suggestion_id` so `shown -> accepted/rejected/ignored/expired` can be analyzed later.
+  - Added `scripts/test-structure-suggestion-feedback-sync.ts` and verified the RED step first on the missing `structureSuggestionFeedback` service.
+  - Implemented `src/services/structureSuggestionFeedback.ts` with local history, pending queue, remote flush/pull, and merge helpers.
+  - Wired app startup/user refresh/manage diagnostics to the new structure suggestion sync.
+  - Added lifecycle logging in `src/components/ConversationStream.tsx` for `return_parent`, `extract_reasoning`, and `extract_task_sop`, including branch-attached extract suggestions.
+  - Documented the new `structure_suggestion_feedback` Supabase table and policies in `README.md`.
+- Files created/modified:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+  - `src/services/structureSuggestionFeedback.ts`
+  - `src/components/ConversationStream.tsx`
+  - `src/App.tsx`
+  - `src/components/ManagePanel.tsx`
+  - `scripts/test-structure-suggestion-feedback-sync.ts`
+  - `package.json`
+  - `README.md`
+
+## Test Results (2026-03-11, structure-suggestion feedback sync)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Structure suggestion sync RED | `npm run test:structure-suggestion-feedback-sync` before implementation | Fails because the sync service module does not exist yet | Failed with missing module as expected | ✓ |
+| Structure suggestion sync GREEN | `npm run test:structure-suggestion-feedback-sync` after implementation | Local event log, pending queue flush, remote pull, and deduping merge all pass | Passed | ✓ |
+| Branch feedback regression | `npm run test:branch-feedback-sync` | Existing branch feedback sync still passes | Passed | ✓ |
+| Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
+| Production build | `npm run build` | App builds successfully with structure-suggestion sync wiring | Passed, with existing chunk-size warning only | ✓ |

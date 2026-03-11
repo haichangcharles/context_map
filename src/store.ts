@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, Node, Branch, ContextView, Pattern, PatternType, Role, DeleteSelectionPreview, SelectionIntent } from './types';
-import { logDeletedChatNodes, mergeRecoveredChatState, type RecoveredChatState } from './services/chatHistory';
+import { logDeletedChatNodes, mergeRecoveredChatState, syncProjectRename, type RecoveredChatState } from './services/chatHistory';
 import { logPatternDelete, logPatternUpsert, mergeRemotePatternsIntoPatterns, type PatternSyncRecord } from './services/patternSync';
 import { reconcileSelectedNodeIds } from './utils/selectionState';
 
@@ -38,6 +38,7 @@ interface AppState {
   // Actions
   createProject: (title: string) => string;
   setActiveProject: (projectId: string) => void;
+  renameProject: (projectId: string, newTitle: string) => void;
   deleteProject: (projectId: string) => void;
   
   addNode: (projectId: string, parentId: string | null, role: Role, content: string, branchId: string | null) => string;
@@ -963,6 +964,18 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
 
   setActiveProject: (projectId) => {
     set({ activeProjectId: projectId });
+  },
+
+  renameProject: (projectId, newTitle) => {
+    const project = get().projects[projectId];
+    if (!project) return;
+    set((state) => ({
+      projects: {
+        ...state.projects,
+        [projectId]: { ...project, title: newTitle },
+      },
+    }));
+    void syncProjectRename(projectId, newTitle).catch(() => {});
   },
 
   deleteProject: (projectId) => {

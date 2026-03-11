@@ -9,6 +9,7 @@ export type QAPair = {
 };
 
 export type BranchFeedbackSample = {
+  sample_id?: string;
   current_tldr: string;
   history_last_3_qa: QAPair[];
   current_node: QAPair;
@@ -25,6 +26,24 @@ export type BranchFeedbackDataset = {
 
 type BranchFeedbackByUser = Record<string, BranchFeedbackDataset>;
 type BehaviourDistribution = Record<BehaviourSource, number>;
+
+export type BranchFeedbackSyncRecord = BranchFeedbackSample & {
+  sample_id: string;
+  user_id: string;
+  captured_at: string;
+};
+
+export type BranchFeedbackSyncState = {
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error_at: string | null;
+  last_error_message: string | null;
+  pending_count: number;
+  last_pull_attempt_at: string | null;
+  last_pull_success_at: string | null;
+  last_pull_error_at: string | null;
+  last_pull_error_message: string | null;
+};
 
 export type UserBranchStats = {
   user_id: string;
@@ -52,10 +71,27 @@ const ACTIVE_USER_KEY = 'context-map.active-user-id';
 const PROFILE_KEY = 'context-map.persona-profile.by-user.v1';
 const BRANCH_DEBUG_KEY = 'context-map.branch-debug.enabled';
 const PENDING_BRANCH_KEY = 'context-map.pending-branch-feedback.by-user.v1';
+const LOCAL_PENDING_SYNC_KEY = 'context-map.branch-feedback.pending-sync.v1';
+const LOCAL_SYNC_STATUS_KEY = 'context-map.branch-feedback.sync-status.v1';
+const SUPABASE_TABLE = 'branch_feedback';
+const FALLBACK_LOCAL_USER_ID = 'local-anonymous';
 
 type PendingBranchFeedback = {
   target_base_path: string;
   sample: Omit<BranchFeedbackSample, 'time'>;
+};
+
+type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+type BranchFeedbackSyncRuntimeOptions = {
+  storage: StorageLike;
+  getEnv: () => {
+    supabaseUrl: string;
+    supabaseAnonKey: string;
+  };
+  fetchImpl: typeof fetch;
+  getUserId: () => string | null;
+  onStatusUpdated?: () => void;
 };
 
 const emptyDataset = (): BranchFeedbackDataset => ({
@@ -63,56 +99,334 @@ const emptyDataset = (): BranchFeedbackDataset => ({
   should_not_branch: [],
 });
 
+const hasWindow = () => typeof window !== 'undefined';
+
+const readJson = <T>(storage: StorageLike, key: string, fallback: T): T => {
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as T;
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const writeJson = <T>(storage: StorageLike, key: string, value: T) => {
+  try {
+    storage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage errors to preserve app flow.
+  }
+};
+
+const normalizeUserIdForStorage = (getUserId: () => string | null): string => {
+  const normalized = getUserId()?.trim() || '';
+  return normalized || FALLBACK_LOCAL_USER_ID;
+};
+
+const createSampleId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `branch-feedback-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const sampleFingerprint = (sample: BranchFeedbackSample): string => JSON.stringify({
+  current_tldr: sample.current_tldr,
+  history_last_3_qa: sample.history_last_3_qa,
+  current_node: sample.current_node,
+  level: sample.level,
+  user_behaviour: sample.user_behaviour,
+  behaviour_source: sample.behaviour_source,
+  time: sample.time,
+});
+
+const getSampleIdentity = (sample: BranchFeedbackSample): string => sample.sample_id || sampleFingerprint(sample);
+
+const normalizeBranchFeedbackSample = (sample: BranchFeedbackSample): BranchFeedbackSample => ({
+  ...sample,
+  sample_id: sample.sample_id || createSampleId(),
+});
+
+const normalizeDataset = (dataset: BranchFeedbackDataset | null | undefined): BranchFeedbackDataset => ({
+  should_branch: Array.isArray(dataset?.should_branch) ? dataset!.should_branch : [],
+  should_not_branch: Array.isArray(dataset?.should_not_branch) ? dataset!.should_not_branch : [],
+});
+
+const appendSampleToDataset = (dataset: BranchFeedbackDataset, sample: BranchFeedbackSample): BranchFeedbackDataset => {
+  const normalizedSample = normalizeBranchFeedbackSample(sample);
+  const identity = getSampleIdentity(normalizedSample);
+  const next = normalizeDataset(dataset);
+  const all = [...next.should_branch, ...next.should_not_branch];
+  if (all.some((existing) => getSampleIdentity(existing) === identity)) {
+    return next;
+  }
+  if (normalizedSample.user_behaviour === 'branch') {
+    return {
+      ...next,
+      should_branch: [...next.should_branch, normalizedSample],
+    };
+  }
+  return {
+    ...next,
+    should_not_branch: [...next.should_not_branch, normalizedSample],
+  };
+};
+
+const sortSamples = (samples: BranchFeedbackSample[]): BranchFeedbackSample[] =>
+  [...samples].sort((a, b) => {
+    const byTime = new Date(a.time).getTime() - new Date(b.time).getTime();
+    if (byTime !== 0) return byTime;
+    return getSampleIdentity(a).localeCompare(getSampleIdentity(b));
+  });
+
+const toSyncRecord = (sample: BranchFeedbackSample, userId: string): BranchFeedbackSyncRecord => {
+  const normalized = normalizeBranchFeedbackSample(sample);
+  return {
+    ...normalized,
+    sample_id: normalized.sample_id as string,
+    user_id: userId,
+    captured_at: new Date().toISOString(),
+  };
+};
+
+export const mergeRemoteBranchFeedbackDataset = (
+  localDataset: BranchFeedbackDataset,
+  remoteRecords: BranchFeedbackSyncRecord[]
+): BranchFeedbackDataset => {
+  let merged = normalizeDataset(localDataset);
+  remoteRecords.forEach((record) => {
+    merged = appendSampleToDataset(merged, record);
+  });
+  return {
+    should_branch: sortSamples(merged.should_branch),
+    should_not_branch: sortSamples(merged.should_not_branch),
+  };
+};
+
+export const createBranchFeedbackSyncRuntime = ({
+  storage,
+  getEnv,
+  fetchImpl,
+  getUserId,
+  onStatusUpdated,
+}: BranchFeedbackSyncRuntimeOptions) => {
+  let flushPromise: Promise<void> | null = null;
+
+  const emitStatusUpdated = () => {
+    onStatusUpdated?.();
+  };
+
+  const readAllByUser = (): BranchFeedbackByUser =>
+    readJson<BranchFeedbackByUser>(storage, STORAGE_KEY, {});
+
+  const readDatasetByUser = (userId: string | null): BranchFeedbackDataset => {
+    if (!userId) return emptyDataset();
+    return normalizeDataset(readAllByUser()[userId]);
+  };
+
+  const writeDatasetByUser = (userId: string, dataset: BranchFeedbackDataset) => {
+    const parsed = readAllByUser();
+    parsed[userId] = normalizeDataset(dataset);
+    writeJson(storage, STORAGE_KEY, parsed);
+  };
+
+  const readPendingQueue = (): BranchFeedbackSyncRecord[] =>
+    readJson<BranchFeedbackSyncRecord[]>(storage, LOCAL_PENDING_SYNC_KEY, []);
+
+  const readSyncState = (): BranchFeedbackSyncState =>
+    readJson<BranchFeedbackSyncState>(storage, LOCAL_SYNC_STATUS_KEY, {
+      last_attempt_at: null,
+      last_success_at: null,
+      last_error_at: null,
+      last_error_message: null,
+      pending_count: readPendingQueue().length,
+      last_pull_attempt_at: null,
+      last_pull_success_at: null,
+      last_pull_error_at: null,
+      last_pull_error_message: null,
+    });
+
+  const writeSyncState = (patch: Partial<BranchFeedbackSyncState>) => {
+    const next = {
+      ...readSyncState(),
+      ...patch,
+    };
+    writeJson(storage, LOCAL_SYNC_STATUS_KEY, next);
+    emitStatusUpdated();
+  };
+
+  const upsertPending = (record: BranchFeedbackSyncRecord) => {
+    const queue = readPendingQueue();
+    const index = queue.findIndex((item) => item.sample_id === record.sample_id);
+    if (index >= 0) {
+      queue[index] = record;
+    } else {
+      queue.push(record);
+    }
+    writeJson(storage, LOCAL_PENDING_SYNC_KEY, queue);
+    writeSyncState({ pending_count: queue.length });
+  };
+
+  const flushPendingInternal = async () => {
+    const { supabaseUrl, supabaseAnonKey } = getEnv();
+    if (!supabaseUrl || !supabaseAnonKey) return;
+
+    let queue = readPendingQueue();
+    if (queue.length === 0) return;
+
+    writeSyncState({
+      last_attempt_at: new Date().toISOString(),
+      pending_count: queue.length,
+    });
+
+    const endpoint = `${supabaseUrl.replace(/\/+$/, '')}/rest/v1/${SUPABASE_TABLE}?on_conflict=sample_id`;
+    while (queue.length > 0) {
+      const batch = queue.slice(0, 100);
+      try {
+        const response = await fetchImpl(endpoint, {
+          method: 'POST',
+          headers: {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${supabaseAnonKey}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=ignore-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          writeSyncState({
+            last_error_at: new Date().toISOString(),
+            last_error_message: `HTTP ${response.status}: ${body || 'unknown error'}`,
+            pending_count: queue.length,
+          });
+          return;
+        }
+      } catch {
+        writeSyncState({
+          last_error_at: new Date().toISOString(),
+          last_error_message: 'Network request failed',
+          pending_count: queue.length,
+        });
+        return;
+      }
+
+      queue = queue.slice(batch.length);
+      writeJson(storage, LOCAL_PENDING_SYNC_KEY, queue);
+      writeSyncState({ pending_count: queue.length });
+    }
+
+    writeSyncState({
+      last_success_at: new Date().toISOString(),
+      last_error_message: null,
+      pending_count: 0,
+    });
+  };
+
+  const flushPending = async () => {
+    if (flushPromise) return flushPromise;
+    flushPromise = flushPendingInternal().finally(() => {
+      flushPromise = null;
+    });
+    return flushPromise;
+  };
+
+  const appendSample = (sample: BranchFeedbackSample): BranchFeedbackSample | null => {
+    const userId = normalizeUserIdForStorage(getUserId);
+    if (!userId) return null;
+    const normalized = normalizeBranchFeedbackSample(sample);
+    const nextDataset = appendSampleToDataset(readDatasetByUser(userId), normalized);
+    writeDatasetByUser(userId, nextDataset);
+    upsertPending(toSyncRecord(normalized, userId));
+    void flushPending();
+    return normalized;
+  };
+
+  const pullRemoteBranchFeedback = async (): Promise<BranchFeedbackSyncRecord[]> => {
+    const { supabaseUrl, supabaseAnonKey } = getEnv();
+    const userId = normalizeUserIdForStorage(getUserId);
+    if (!supabaseUrl || !supabaseAnonKey || !userId) return [];
+
+    writeSyncState({
+      last_pull_attempt_at: new Date().toISOString(),
+    });
+
+    try {
+      const endpoint = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/${SUPABASE_TABLE}`);
+      endpoint.searchParams.set('select', '*');
+      endpoint.searchParams.set('user_id', `eq.${userId}`);
+      endpoint.searchParams.set('order', 'time.asc');
+
+      const response = await fetchImpl(endpoint.toString(), {
+        method: 'GET',
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        writeSyncState({
+          last_pull_error_at: new Date().toISOString(),
+          last_pull_error_message: `HTTP ${response.status}: ${body || 'unknown error'}`,
+        });
+        return [];
+      }
+
+      const records = (await response.json().catch(() => [])) as BranchFeedbackSyncRecord[];
+      writeSyncState({
+        last_pull_success_at: new Date().toISOString(),
+        last_pull_error_message: null,
+      });
+      return Array.isArray(records) ? records : [];
+    } catch {
+      writeSyncState({
+        last_pull_error_at: new Date().toISOString(),
+        last_pull_error_message: 'Network request failed',
+      });
+      return [];
+    }
+  };
+
+  const mergeRemoteRecordsIntoLocal = (userId: string, remoteRecords: BranchFeedbackSyncRecord[]) => {
+    const merged = mergeRemoteBranchFeedbackDataset(readDatasetByUser(userId), remoteRecords);
+    writeDatasetByUser(userId, merged);
+    return merged;
+  };
+
+  return {
+    appendSample,
+    flushPending,
+    pullRemoteBranchFeedback,
+    mergeRemoteRecordsIntoLocal,
+    readLocalDatasetByUser: readDatasetByUser,
+    readPendingQueue,
+    readSyncState,
+  };
+};
+
 export const readBranchFeedbackDataset = (): BranchFeedbackDataset => {
   const activeUserId = getActiveUserId();
   return readBranchFeedbackDatasetByUser(activeUserId);
 };
 
 export const readAllBranchFeedbackByUser = (): BranchFeedbackByUser => {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as BranchFeedbackByUser;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+  if (!hasWindow()) return {};
+  return readJson<BranchFeedbackByUser>(window.localStorage, STORAGE_KEY, {});
 };
 
 export const readBranchFeedbackDatasetByUser = (userId: string | null): BranchFeedbackDataset => {
-  if (!userId) return emptyDataset();
-  if (typeof window === 'undefined') return emptyDataset();
-  try {
-    const parsed = readAllBranchFeedbackByUser();
-    const dataset = parsed[userId];
-    if (!dataset) return emptyDataset();
-    return {
-      should_branch: Array.isArray(dataset.should_branch) ? dataset.should_branch : [],
-      should_not_branch: Array.isArray(dataset.should_not_branch) ? dataset.should_not_branch : [],
-    };
-  } catch {
-    return emptyDataset();
-  }
+  if (!userId || !hasWindow()) return emptyDataset();
+  return normalizeDataset(readAllBranchFeedbackByUser()[userId]);
 };
 
 export const appendBranchFeedbackSample = (sample: BranchFeedbackSample) => {
-  if (typeof window === 'undefined') return;
-  const activeUserId = getActiveUserId();
-  if (!activeUserId) return;
-  const dataset = readBranchFeedbackDatasetByUser(activeUserId);
-  if (sample.user_behaviour === 'branch') {
-    dataset.should_branch.push(sample);
-  } else {
-    dataset.should_not_branch.push(sample);
-  }
-  try {
-    const parsed = readAllBranchFeedbackByUser();
-    parsed[activeUserId] = dataset;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-  } catch {
-    // Ignore storage errors to avoid breaking chat flow.
-  }
+  defaultRuntime?.appendSample(sample);
 };
 
 const readPendingBranchFeedbackByUser = (): Record<string, PendingBranchFeedback> => {
@@ -331,15 +645,8 @@ export const readPersonaProfile = (userId: string): PersonaProfile | null => {
 };
 
 export const readAllPersonaProfiles = (): Record<string, PersonaProfile> => {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(PROFILE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, PersonaProfile>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+  if (!hasWindow()) return {};
+  return readJson<Record<string, PersonaProfile>>(window.localStorage, PROFILE_KEY, {});
 };
 
 const normalize = (text: string, max = 220): string =>
@@ -349,3 +656,85 @@ export const buildQAPair = (userNode?: Node | null, assistantNode?: Node | null)
   user: normalize(userNode?.content || ''),
   assistant: normalize(assistantNode?.content || ''),
 });
+
+const defaultRuntime = (() => {
+  if (!hasWindow()) return null;
+
+  return createBranchFeedbackSyncRuntime({
+    storage: window.localStorage,
+    getEnv: () => ({
+      supabaseUrl: ((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SUPABASE_URL || '').trim(),
+      supabaseAnonKey: ((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SUPABASE_ANON_KEY || '').trim(),
+    }),
+    fetchImpl: fetch,
+    getUserId: () => getActiveUserId(),
+    onStatusUpdated: () => {
+      window.dispatchEvent(new CustomEvent('branch-feedback-sync-updated'));
+    },
+  });
+})();
+
+export const flushBranchFeedbackSyncQueue = async () => {
+  if (!defaultRuntime) return;
+  await defaultRuntime.flushPending();
+};
+
+export const startBranchFeedbackSync = () => {
+  if (!hasWindow() || !defaultRuntime) return () => {};
+
+  const onOnline = () => {
+    void flushBranchFeedbackSyncQueue();
+  };
+
+  const onVisible = () => {
+    if (typeof document !== 'undefined' && !document.hidden) {
+      void flushBranchFeedbackSyncQueue();
+    }
+  };
+
+  window.addEventListener('online', onOnline);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisible);
+  }
+
+  const timer = window.setInterval(() => {
+    void flushBranchFeedbackSyncQueue();
+  }, 15000);
+
+  void flushBranchFeedbackSyncQueue();
+
+  return () => {
+    window.removeEventListener('online', onOnline);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisible);
+    }
+    window.clearInterval(timer);
+  };
+};
+
+export const readBranchFeedbackSyncState = (): BranchFeedbackSyncState =>
+  defaultRuntime
+    ? defaultRuntime.readSyncState()
+    : {
+        last_attempt_at: null,
+        last_success_at: null,
+        last_error_at: null,
+        last_error_message: null,
+        pending_count: 0,
+        last_pull_attempt_at: null,
+        last_pull_success_at: null,
+        last_pull_error_at: null,
+        last_pull_error_message: null,
+      };
+
+export const pullRemoteBranchFeedback = async (): Promise<BranchFeedbackSyncRecord[]> => {
+  if (!defaultRuntime) return [];
+  return defaultRuntime.pullRemoteBranchFeedback();
+};
+
+export const mergeBranchFeedbackFromRemoteRecords = (remoteRecords: BranchFeedbackSyncRecord[]) => {
+  if (!defaultRuntime) return emptyDataset();
+  const userId = getActiveUserId();
+  if (!userId) return emptyDataset();
+  return defaultRuntime.mergeRemoteRecordsIntoLocal(userId, remoteRecords);
+};

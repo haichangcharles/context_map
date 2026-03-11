@@ -95,10 +95,12 @@ Notes:
 - You can set OpenAI model override at runtime in `/manage` (stored in browser localStorage)
 - Structure suggestions use `GEMINI_API_KEY` / `GEMINI_MODEL` when available, without changing the main chat provider
 - Model API keys are used only in serverless API (`/api/chat/completions`), not exposed in frontend bundle
-- If Supabase env vars are not provided, chat history and patterns are still stored locally and queued for later sync
+- If Supabase env vars are not provided, chat history, patterns, branch feedback, and structure-suggestion feedback are still stored locally and queued for later sync
 - App state (`projects/nodes/branches/context/patterns`) is persisted in browser `localStorage` (`context-map.app-state.v1`)
 - Chat history local keys: `context-map.chat-history.by-user.v1`, `context-map.chat-history.pending-sync.v1`
 - Pattern local keys: `context-map.pattern-history.by-user.v1`, `context-map.pattern-history.pending-sync.v1`
+- Branch feedback local keys: `context-map.branch-feedback.by-user.v1`, `context-map.branch-feedback.pending-sync.v1`
+- Structure suggestion local keys: `context-map.structure-suggestion-feedback.by-user.v1`, `context-map.structure-suggestion-feedback.pending-sync.v1`
 - Supabase sync auto-retries on app start, every 15s, when tab becomes visible, and when network comes back online
 
 ### 6.1 Supabase Table (Optional, for user study logging)
@@ -126,6 +128,12 @@ on public.chat_history
 for insert
 to anon
 with check (true);
+
+create policy "allow anon select chat history"
+on public.chat_history
+for select
+to anon
+using (true);
 ```
 
 If you already created the table before this change, run:
@@ -166,6 +174,83 @@ with check (true);
 
 create policy "allow anon select patterns"
 on public.patterns
+for select
+to anon
+using (true);
+```
+
+Also create the branch feedback sync table:
+
+```sql
+create table if not exists public.branch_feedback (
+  sample_id text primary key,
+  user_id text not null,
+  current_tldr text not null default '',
+  history_last_3_qa jsonb not null default '[]'::jsonb,
+  current_node jsonb not null default '{}'::jsonb,
+  level integer not null default 1,
+  user_behaviour text not null,
+  behaviour_source text not null,
+  time timestamptz not null,
+  captured_at timestamptz not null default now()
+);
+
+alter table public.branch_feedback enable row level security;
+
+create policy "allow anon insert branch feedback"
+on public.branch_feedback
+for insert
+to anon
+with check (true);
+
+create policy "allow anon select branch feedback"
+on public.branch_feedback
+for select
+to anon
+using (true);
+```
+
+Also create the structure suggestion feedback sync table:
+
+```sql
+create table if not exists public.structure_suggestion_feedback (
+  event_id text primary key,
+  suggestion_id text not null,
+  user_id text not null,
+  project_id text null,
+  base_path text null,
+  target_node_id text null,
+  suggestion_kind text not null,
+  origin_kind text not null,
+  decision text not null,
+  current_tldr text not null default '',
+  history_last_3_qa jsonb not null default '[]'::jsonb,
+  current_node jsonb not null default '{}'::jsonb,
+  suggestion_payload jsonb not null default '{}'::jsonb,
+  shown_at timestamptz not null,
+  decided_at timestamptz null,
+  captured_at timestamptz not null default now()
+);
+
+create index if not exists structure_suggestion_feedback_user_id_idx
+on public.structure_suggestion_feedback (user_id);
+
+create index if not exists structure_suggestion_feedback_suggestion_id_idx
+on public.structure_suggestion_feedback (suggestion_id);
+
+create index if not exists structure_suggestion_feedback_shown_at_idx
+on public.structure_suggestion_feedback (shown_at desc);
+
+alter table public.structure_suggestion_feedback enable row level security;
+
+create policy "allow anon insert structure suggestion feedback"
+on public.structure_suggestion_feedback
+for insert
+to anon
+with check (true);
+
+create policy "allow anon select structure suggestion feedback"
+on public.structure_suggestion_feedback
 for select
 to anon
 using (true);

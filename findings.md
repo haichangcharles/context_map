@@ -70,3 +70,16 @@
 - Remote chat-history pull reconstructs projects from historical messages, so stale remote data can immediately recreate a locally deleted project unless those node IDs are still suppressed locally.
 - `filterRecoveredChatStateByDeletedNodeIds` correctly removed deleted nodes, but it still retained `projects`/`contexts` entries for projects with zero surviving nodes, which allowed an empty restored project shell to reappear.
 - Deleting an entire project needs the same tombstone discipline as deleting selected nodes: preserve deleted node IDs locally and enqueue delete tombstones for remote sync.
+
+## New Findings: Branch Feedback Sync
+- Current branch feedback exists only in browser `localStorage` under `context-map.branch-feedback.by-user.v1`; there is no remote sync path today.
+- The feedback UI and stats already assume a per-user dataset split into `should_branch` and `should_not_branch`, so the safest remote merge target is that same local dataset shape rather than Zustand app state.
+- `accept_branch` is intentionally committed only after the user sends the first message from the created branch, so remote sync must hook into the final append point, not the earlier pending sample.
+- The existing app already starts chat-history and pattern sync on boot and refreshes them on user-confirm, network-online, tab-visible, and a 15s interval; branch feedback can reuse that orchestration.
+- Append-only feedback needs a stable `sample_id` to avoid duplicate merges after pulling remote rows back into local storage.
+
+## New Findings: Structure Suggestion Feedback
+- `return_parent` and `extract_*` suggestions are UI state only today; dismissing or accepting them does not persist any explicit feedback record.
+- A single inline surface can show multiple structure items at once, so feedback needs per-suggestion identities rather than one boolean per pending state.
+- The cleanest model is an append-only event stream with `suggestion_id` plus `decision` (`shown`, `accepted`, `rejected`, `ignored`, `expired`) so lifecycle analysis survives retries and remote merges.
+- Branch-attached extract suggestions (`branch_extract`) should live in the same structure-suggestion table as plain `structure_extract`, because analytically they are both extraction suggestions with different origins.

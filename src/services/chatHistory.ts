@@ -558,3 +558,51 @@ export const logDeletedChatNodes = async (
 
   void flushChatHistoryQueue();
 };
+
+export const syncProjectRename = async (projectId: string, newTitle: string) => {
+  if (supportsRemoteProjectTitle === false) return;
+  const config = getSupabaseConfig();
+  const userId = normalizeUserId();
+  if (!config || !userId || !hasWindow()) return;
+
+  const endpoint = `${config.url}/rest/v1/${SUPABASE_TABLE}?project_id=eq.${encodeURIComponent(projectId)}&user_id=eq.${encodeURIComponent(userId)}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${config.anonKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ project_title: newTitle }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      console.warn('[chat-history] project rename sync failed', { status: response.status, body });
+    }
+  } catch {
+    console.warn('[chat-history] project rename sync request error');
+  }
+
+  const localHistory = readJson<ChatHistoryByUser>(LOCAL_CHAT_HISTORY_KEY, {});
+  const userRecords = localHistory[userId];
+  if (userRecords) {
+    localHistory[userId] = userRecords.map((record) =>
+      record.project_id === projectId ? { ...record, project_title: newTitle } : record
+    );
+    writeJson(LOCAL_CHAT_HISTORY_KEY, localHistory);
+  }
+
+  const queue = readJson<ChatHistoryRecord[]>(LOCAL_PENDING_SYNC_KEY, []);
+  if (queue.some((record) => record.project_id === projectId)) {
+    writeJson(
+      LOCAL_PENDING_SYNC_KEY,
+      queue.map((record) =>
+        record.project_id === projectId ? { ...record, project_title: newTitle } : record
+      )
+    );
+  }
+};

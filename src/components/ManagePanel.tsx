@@ -4,6 +4,7 @@ import {
   computeUserBranchStats,
   getActiveUserId,
   getBranchDebugEnabled,
+  readBranchFeedbackSyncState,
   readAllBranchFeedbackByUser,
   readAllPersonaProfiles,
   readBranchFeedbackDatasetByUser,
@@ -14,6 +15,7 @@ import {
 } from '../utils/branchFeedbackDataset';
 import { readChatHistorySyncState } from '../services/chatHistory';
 import { readPatternSyncState } from '../services/patternSync';
+import { readStructureSuggestionFeedbackSyncState } from '../services/structureSuggestionFeedback';
 import {
   getModelProviderPreference,
   getOpenAIModelOverride,
@@ -34,6 +36,8 @@ export default function ManagePanel() {
   const activeUserId = getActiveUserId() || '';
   const chatSync = readChatHistorySyncState();
   const patternSync = readPatternSyncState();
+  const branchFeedbackSync = readBranchFeedbackSyncState();
+  const structureSuggestionSync = readStructureSuggestionFeedbackSyncState();
   const users = useMemo(() => {
     const byUser = readAllBranchFeedbackByUser();
     const profiles = readAllPersonaProfiles();
@@ -56,9 +60,13 @@ export default function ManagePanel() {
     const onSyncUpdate = () => setRefreshTick((n) => n + 1);
     window.addEventListener('chat-history-sync-updated', onSyncUpdate);
     window.addEventListener('pattern-sync-updated', onSyncUpdate);
+    window.addEventListener('branch-feedback-sync-updated', onSyncUpdate);
+    window.addEventListener('structure-suggestion-feedback-sync-updated', onSyncUpdate);
     return () => {
       window.removeEventListener('chat-history-sync-updated', onSyncUpdate);
       window.removeEventListener('pattern-sync-updated', onSyncUpdate);
+      window.removeEventListener('branch-feedback-sync-updated', onSyncUpdate);
+      window.removeEventListener('structure-suggestion-feedback-sync-updated', onSyncUpdate);
     };
   }, []);
 
@@ -242,6 +250,21 @@ export default function ManagePanel() {
         </div>
 
         <div className="bg-white border border-zinc-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold mb-3">Branch Feedback Sync Status</h2>
+          <div className="text-sm space-y-1">
+            <div>pending_queue: {branchFeedbackSync.pending_count}</div>
+            <div>last_attempt_at: {branchFeedbackSync.last_attempt_at || 'N/A'}</div>
+            <div>last_success_at: {branchFeedbackSync.last_success_at || 'N/A'}</div>
+            <div>last_error_at: {branchFeedbackSync.last_error_at || 'N/A'}</div>
+            <div>last_error_message: {branchFeedbackSync.last_error_message || 'None'}</div>
+            <div>last_pull_attempt_at: {branchFeedbackSync.last_pull_attempt_at || 'N/A'}</div>
+            <div>last_pull_success_at: {branchFeedbackSync.last_pull_success_at || 'N/A'}</div>
+            <div>last_pull_error_at: {branchFeedbackSync.last_pull_error_at || 'N/A'}</div>
+            <div>last_pull_error_message: {branchFeedbackSync.last_pull_error_message || 'None'}</div>
+          </div>
+        </div>
+
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
           <h2 className="text-sm font-semibold mb-3">Pattern Sync Status</h2>
           <div className="text-sm space-y-1">
             <div>pending_queue: {patternSync.pending_count}</div>
@@ -253,6 +276,21 @@ export default function ManagePanel() {
             <div>last_pull_success_at: {patternSync.last_pull_success_at || 'N/A'}</div>
             <div>last_pull_error_at: {patternSync.last_pull_error_at || 'N/A'}</div>
             <div>last_pull_error_message: {patternSync.last_pull_error_message || 'None'}</div>
+          </div>
+        </div>
+
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold mb-3">Structure Suggestion Sync Status</h2>
+          <div className="text-sm space-y-1">
+            <div>pending_queue: {structureSuggestionSync.pending_count}</div>
+            <div>last_attempt_at: {structureSuggestionSync.last_attempt_at || 'N/A'}</div>
+            <div>last_success_at: {structureSuggestionSync.last_success_at || 'N/A'}</div>
+            <div>last_error_at: {structureSuggestionSync.last_error_at || 'N/A'}</div>
+            <div>last_error_message: {structureSuggestionSync.last_error_message || 'None'}</div>
+            <div>last_pull_attempt_at: {structureSuggestionSync.last_pull_attempt_at || 'N/A'}</div>
+            <div>last_pull_success_at: {structureSuggestionSync.last_pull_success_at || 'N/A'}</div>
+            <div>last_pull_error_at: {structureSuggestionSync.last_pull_error_at || 'N/A'}</div>
+            <div>last_pull_error_message: {structureSuggestionSync.last_pull_error_message || 'None'}</div>
           </div>
         </div>
 
