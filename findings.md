@@ -83,3 +83,15 @@
 - A single inline surface can show multiple structure items at once, so feedback needs per-suggestion identities rather than one boolean per pending state.
 - The cleanest model is an append-only event stream with `suggestion_id` plus `decision` (`shown`, `accepted`, `rejected`, `ignored`, `expired`) so lifecycle analysis survives retries and remote merges.
 - Branch-attached extract suggestions (`branch_extract`) should live in the same structure-suggestion table as plain `structure_extract`, because analytically they are both extraction suggestions with different origins.
+
+## New Findings: Project Rename Persistence
+- `renameProject()` updates local Zustand state immediately and then calls `syncProjectRename(projectId, newTitle)`.
+- The current remote rename path tries to `PATCH chat_history`, but your Supabase setup only grants `insert`/`select`; a live check returned `PATCH 200 []`, and the remote rows kept the old `project_title`.
+- Because recovery derives project titles from remote `chat_history` rows, a browser that depends on remote recovery can revert to the old title after refresh.
+- The safest fix under insert-only permissions is to append a rename marker row carrying the latest `project_title`, then teach reconstruction to use that title but ignore the marker as a visible chat node.
+
+## New Findings: Tutorial Example Seed
+- The existing example project was framed as an internal MVP-building conversation, so first-time users were forced to infer product behavior instead of being guided through it.
+- The seed path already supports multi-branch examples out of the box, so the lowest-risk tutorial implementation is to replace only the seeded node content and branch wiring inside `src/store.ts`.
+- A nested example branch is worth including in the seed because it gives a concrete, inspectable case for `return_parent`, which is otherwise hard to explain from a flat graph.
+- A small scripted regression test can validate tutorial intent by checking the seeded project title, mainline order, and the presence of branch/return/extract cues without depending on UI rendering.

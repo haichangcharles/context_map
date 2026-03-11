@@ -69,6 +69,18 @@ const records: ChatHistoryRecord[] = [
     message_timestamp: '2026-03-06T10:02:00.000Z',
     captured_at: '2026-03-06T10:02:01.000Z',
   },
+  {
+    message_id: 'context-map-rename:project-1:2026-03-06T10:03:00.000Z',
+    user_id: 'user-1',
+    project_id: 'project-1',
+    project_title: 'Renamed Project Title',
+    parent_id: null,
+    branch_id: null,
+    role: 'system',
+    content: '[context-map-project-rename] Renamed Project Title',
+    message_timestamp: '2026-03-06T10:03:00.000Z',
+    captured_at: '2026-03-06T10:03:01.000Z',
+  },
 ];
 
 const run = () => {
@@ -76,11 +88,12 @@ const run = () => {
 
   assert.equal(Object.keys(recovered.projects).length, 1);
   assert.equal(recovered.projects['project-1']?.root_node_id, 'm1');
-  assert.equal(recovered.projects['project-1']?.title, 'Stored Project Title');
+  assert.equal(recovered.projects['project-1']?.title, 'Renamed Project Title');
   assert.deepEqual(recovered.mainlines['project-1'], ['m1']);
   assert.deepEqual(recovered.naturalMainlines['project-1'], ['m1']);
   assert.deepEqual(recovered.deletedNodeIds, ['m2']);
   assert.ok(!recovered.nodes['m2'], 'remote tombstone should remove deleted node during reconstruction');
+  assert.ok(!recovered.nodes['context-map-rename:project-1:2026-03-06T10:03:00.000Z'], 'rename markers should not become visible nodes');
   assert.equal(recovered.nodes['b1']?.branch_id, 'branch-1');
   assert.equal(recovered.branches['branch-1']?.anchor_node_id, 'm1');
   assert.equal(recovered.branches['branch-1']?.parent_branch_id, null);

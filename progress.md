@@ -218,6 +218,29 @@
 - Files created/modified:
   - `task_plan.md`
   - `findings.md`
+
+### Follow-up Feature: Tutorial example seed data
+- **Status:** complete
+- **Started:** 2026-03-11 17:05:00 EDT
+- Actions taken:
+  - Confirmed the existing example project was a product-development conversation rather than a first-run tutorial.
+  - Added a RED script test that seeds browser-like localStorage for user `test` and asserts the example project reads like a tutorial with branch, return, and extract coverage.
+  - Replaced the seeded mainline in `src/store.ts` with a step-by-step onboarding conversation and repurposed the side branches into feature demos.
+  - Added one nested tutorial branch anchored inside another branch so the sample graph demonstrates `return_parent` instead of only describing it.
+  - Added `npm run test:example-seed` for repeatable verification.
+- Files created/modified:
+  - `src/store.ts`
+  - `scripts/test-example-seed.ts`
+  - `package.json`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results (2026-03-11, tutorial example seed)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Tutorial seed RED | `npx tsx scripts/test-example-seed.ts` before implementation | Fails because the seeded project is still the old generic example | Failed on old title as expected | ✓ |
+| Tutorial seed GREEN | `npm run test:example-seed` after implementation | Seeded project exposes tutorial mainline, nested return branch, and extract branch | Passed | ✓ |
   - `progress.md`
   - `src/utils/branchFeedbackDataset.ts`
   - `src/App.tsx`
@@ -281,3 +304,27 @@
   - `README.md`
   - `task_plan.md`
   - `progress.md`
+
+### Follow-up Bugfix: Project rename survives refresh
+- **Status:** complete
+- Actions taken:
+  - Traced the rename flow from `ProjectList` to `store.renameProject()` and `chatHistory.syncProjectRename()`.
+  - Verified with a live Supabase check that the current `PATCH chat_history` path does not update remote rows under the existing anon policies.
+  - Identified remote title recovery as the likely reason renamed projects can revert after refresh.
+  - Added a RED regression case to `scripts/test-chat-history-sync.ts` covering rename-marker recovery and ensuring rename markers do not become visible nodes.
+  - Updated `src/services/chatHistory.ts` to append insert-only rename marker records and to use them during project-title reconstruction.
+  - Re-ran chat-history sync tests, lint, and build after the rename-marker fix.
+- Files created/modified:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+  - `src/services/chatHistory.ts`
+  - `scripts/test-chat-history-sync.ts`
+
+## Test Results (2026-03-11, project rename persistence)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Rename persistence RED | `npm run test:chat-history-sync` before fix | Fails because rename markers are treated like visible nodes and latest title is not recovered | Failed as expected | ✓ |
+| Rename persistence GREEN | `npm run test:chat-history-sync` after fix | Recovery uses the latest rename marker title and keeps markers out of visible nodes/mainline | Passed | ✓ |
+| Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
+| Production build | `npm run build` | App builds successfully after rename persistence fix | Passed, with existing chunk-size warning only | ✓ |

@@ -7,8 +7,8 @@ import ProjectList from './components/ProjectList';
 import ConversationStream from './components/ConversationStream';
 import ContextMap from './components/ContextMap';
 import ManagePanel from './components/ManagePanel';
-import { useState, useEffect } from 'react';
-import { PanelRightClose, PanelRightOpen, Maximize2, Minimize2 } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { PanelRightClose, PanelRightOpen, Maximize2, Minimize2, BookOpen, ChevronDown } from 'lucide-react';
 import clsx from 'clsx';
 import {
   getActiveUserId,
@@ -24,7 +24,7 @@ import {
   pullRemoteStructureSuggestionFeedback,
   startStructureSuggestionFeedbackSync,
 } from './services/structureSuggestionFeedback';
-import { mergePatternsFromRemoteRecords, mergeRecoveredChatStateIntoStore, rehydrateStoreForActiveUser } from './store';
+import { mergePatternsFromRemoteRecords, mergeRecoveredChatStateIntoStore, rehydrateStoreForActiveUser, useAppStore } from './store';
 
 export default function App() {
   const isManageRoute = typeof window !== 'undefined' && window.location.pathname === '/manage';
@@ -39,6 +39,9 @@ export default function App() {
   const [managePasswordInput, setManagePasswordInput] = useState('');
   const [manageAuthError, setManageAuthError] = useState('');
   const [isManageAuthed, setIsManageAuthed] = useState(false);
+  const [isTutorialMenuOpen, setIsTutorialMenuOpen] = useState(false);
+  const importTutorialProject = useAppStore((state) => state.importTutorialProject);
+  const tutorialMenuRef = useRef<HTMLDivElement>(null);
 
   const syncPatternsFromRemote = async () => {
     const records = await pullRemotePatterns();
@@ -89,6 +92,17 @@ export default function App() {
     const existing = window.sessionStorage.getItem(MANAGE_AUTH_KEY);
     setIsManageAuthed(existing === '1');
   }, [isManageRoute]);
+
+  useEffect(() => {
+    if (!isTutorialMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (tutorialMenuRef.current && !tutorialMenuRef.current.contains(event.target as Node)) {
+        setIsTutorialMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isTutorialMenuOpen]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -191,6 +205,11 @@ export default function App() {
     setActiveUserIdState(null);
   };
 
+  const handleImportTutorial = (language: 'zh' | 'en') => {
+    importTutorialProject(language);
+    setIsTutorialMenuOpen(false);
+  };
+
   if (!activeUserId) {
     return (
       <div className="h-screen w-full bg-zinc-100 text-zinc-900 flex items-center justify-center">
@@ -224,14 +243,43 @@ export default function App() {
   return (
     <div className="flex h-screen w-full bg-zinc-50 text-zinc-900 overflow-hidden font-sans flex-col">
       {!isManageRoute && activeUserId && (
-        <div className="h-10 border-b border-zinc-200 bg-white px-4 flex items-center justify-end gap-2 text-xs text-zinc-600">
-          <span>Current User: <strong className="text-zinc-800">{activeUserId}</strong></span>
-          <button
-            onClick={handleSwitchUser}
-            className="px-2 py-1 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100"
-          >
-            Switch
-          </button>
+        <div className="h-10 border-b border-zinc-200 bg-white px-4 flex items-center justify-between gap-4 text-xs text-zinc-600">
+          <div className="relative" ref={tutorialMenuRef}>
+            <button
+              onClick={() => setIsTutorialMenuOpen((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 rounded border border-zinc-300 px-2 py-1 text-zinc-700 hover:bg-zinc-100"
+              title="Import tutorial project"
+            >
+              <BookOpen size={13} />
+              <span>Import Tutorial</span>
+              <ChevronDown size={12} />
+            </button>
+            {isTutorialMenuOpen && (
+              <div className="absolute left-0 top-full z-50 mt-1 min-w-[10rem] overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10">
+                <button
+                  onClick={() => handleImportTutorial('zh')}
+                  className="flex w-full items-center px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100"
+                >
+                  中文教材
+                </button>
+                <button
+                  onClick={() => handleImportTutorial('en')}
+                  className="flex w-full items-center px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100"
+                >
+                  English Tutorial
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span>Current User: <strong className="text-zinc-800">{activeUserId}</strong></span>
+            <button
+              onClick={handleSwitchUser}
+              className="px-2 py-1 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+            >
+              Switch
+            </button>
+          </div>
         </div>
       )}
       {isManageRoute ? (

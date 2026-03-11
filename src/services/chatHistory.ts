@@ -50,6 +50,8 @@ const MAX_LOCAL_MESSAGES_PER_USER = 5000;
 const FALLBACK_LOCAL_USER_ID = 'local-anonymous';
 const DELETE_TOMBSTONE_MESSAGE_PREFIX = 'context-map-delete:';
 const DELETE_TOMBSTONE_CONTENT_PREFIX = '[context-map-delete] ';
+const RENAME_MARKER_MESSAGE_PREFIX = 'context-map-rename:';
+const RENAME_MARKER_CONTENT_PREFIX = '[context-map-project-rename] ';
 
 let flushPromise: Promise<void> | null = null;
 let supportsRemoteProjectTitle: boolean | null = null;
@@ -157,6 +159,10 @@ const parseDeletedNodeIdFromRecord = (record: ChatHistoryRecord): string | null 
   return deletedNodeId || null;
 };
 
+const isProjectRenameMarkerRecord = (record: ChatHistoryRecord): boolean =>
+  record.message_id.startsWith(RENAME_MARKER_MESSAGE_PREFIX) ||
+  record.content.startsWith(RENAME_MARKER_CONTENT_PREFIX);
+
 export const buildDeleteTombstoneRecord = (
   node: Node,
   options?: { projectTitle?: string | null }
@@ -171,6 +177,22 @@ export const buildDeleteTombstoneRecord = (
     branch_id: null,
     role: 'system',
     content: `${DELETE_TOMBSTONE_CONTENT_PREFIX}${node.node_id}`,
+    message_timestamp: timestamp,
+    captured_at: timestamp,
+  };
+};
+
+const buildProjectRenameMarkerRecord = (projectId: string, newTitle: string, userId: string): ChatHistoryRecord => {
+  const timestamp = new Date().toISOString();
+  return {
+    message_id: `${RENAME_MARKER_MESSAGE_PREFIX}${projectId}:${timestamp}`,
+    user_id: userId,
+    project_id: projectId,
+    project_title: newTitle.trim() || null,
+    parent_id: null,
+    branch_id: null,
+    role: 'system',
+    content: `${RENAME_MARKER_CONTENT_PREFIX}${newTitle.trim()}`,
     message_timestamp: timestamp,
     captured_at: timestamp,
   };
@@ -192,8 +214,13 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
       .filter((nodeId): nodeId is string => !!nodeId)
   ));
   const deletedNodeIdSet = new Set(deletedNodeIds);
+  const orderedProjectMetadata = ordered.filter((record) => (
+    !parseDeletedNodeIdFromRecord(record) &&
+    !deletedNodeIdSet.has(record.message_id)
+  ));
   const orderedMessages = ordered.filter((record) => (
     !parseDeletedNodeIdFromRecord(record) &&
+    !isProjectRenameMarkerRecord(record) &&
     !deletedNodeIdSet.has(record.message_id)
   ));
   const nodes: Record<string, Node> = {};
@@ -204,6 +231,7 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
   const naturalMainlines: Record<string, string[]> = {};
   const naturalBranches: Record<string, Branch> = {};
   const orderedByProject = new Map<string, ChatHistoryRecord[]>();
+  const metadataByProject = new Map<string, ChatHistoryRecord[]>();
 
   orderedMessages.forEach((record) => {
     if (!orderedByProject.has(record.project_id)) orderedByProject.set(record.project_id, []);
@@ -222,6 +250,11 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
     };
   });
 
+  orderedProjectMetadata.forEach((record) => {
+    if (!metadataByProject.has(record.project_id)) metadataByProject.set(record.project_id, []);
+    metadataByProject.get(record.project_id)!.push(record);
+  });
+
   for (const [projectId, projectRecords] of orderedByProject.entries()) {
     const contextId = `restored-context:${projectId}`;
     const mainlineIds = projectRecords.filter((record) => record.branch_id === null).map((record) => record.message_id);
@@ -236,7 +269,7 @@ export const reconstructChatStateFromRecords = (records: ChatHistoryRecord[]): R
 
     projects[projectId] = {
       project_id: projectId,
-      title: resolveRecoveredProjectTitle(projectId, projectRecords),
+      title: resolveRecoveredProjectTitle(projectId, metadataByProject.get(projectId) || projectRecords),
       root_node_id: rootNodeId,
       mainline_id: `mainline_${projectId}`,
       active_context_id: contextId,
@@ -560,28 +593,33 @@ export const logDeletedChatNodes = async (
 };
 
 export const syncProjectRename = async (projectId: string, newTitle: string) => {
-  if (supportsRemoteProjectTitle === false) return;
   const config = getSupabaseConfig();
   const userId = normalizeUserId();
   if (!config || !userId || !hasWindow()) return;
 
+  const renameMarker = buildProjectRenameMarkerRecord(projectId, newTitle, userId);
+  appendLocalHistory(renameMarker);
+  upsertPending(renameMarker);
+
   const endpoint = `${config.url}/rest/v1/${SUPABASE_TABLE}?project_id=eq.${encodeURIComponent(projectId)}&user_id=eq.${encodeURIComponent(userId)}`;
 
   try {
-    const response = await fetch(endpoint, {
-      method: 'PATCH',
-      headers: {
-        apikey: config.anonKey,
-        Authorization: `Bearer ${config.anonKey}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal',
-      },
-      body: JSON.stringify({ project_title: newTitle }),
-    });
+    if (supportsRemoteProjectTitle !== false) {
+      const response = await fetch(endpoint, {
+        method: 'PATCH',
+        headers: {
+          apikey: config.anonKey,
+          Authorization: `Bearer ${config.anonKey}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({ project_title: newTitle }),
+      });
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      console.warn('[chat-history] project rename sync failed', { status: response.status, body });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        console.warn('[chat-history] project rename sync failed', { status: response.status, body });
+      }
     }
   } catch {
     console.warn('[chat-history] project rename sync request error');
@@ -605,4 +643,6 @@ export const syncProjectRename = async (projectId: string, newTitle: string) => 
       )
     );
   }
+
+  void flushChatHistoryQueue();
 };

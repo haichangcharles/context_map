@@ -37,6 +37,7 @@ interface AppState {
   
   // Actions
   createProject: (title: string) => string;
+  importTutorialProject: (language?: 'zh' | 'en') => string;
   setActiveProject: (projectId: string) => void;
   renameProject: (projectId: string, newTitle: string) => void;
   deleteProject: (projectId: string) => void;
@@ -90,6 +91,8 @@ const EXAMPLE_CONTEXT_ID = 'example-context';
 const EXAMPLE_BRANCH_RESEARCH = 'example-branch-research';
 const EXAMPLE_BRANCH_ARCH = 'example-branch-architecture';
 const EXAMPLE_BRANCH_UI = 'example-branch-ui';
+const TUTORIAL_PROJECT_TITLE = 'Tutorial - Learn Context Map';
+const TUTORIAL_PROJECT_TITLE_ZH = '教程 - 学习 Context Map';
 
 const shouldSeedExampleData = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -102,132 +105,267 @@ const shouldSeedExampleData = (): boolean => {
   return userId === 'test' || !hasPersistedState;
 };
 
-const exampleNodes: Record<string, Node> = {
-  'ex-n1': {
-    node_id: 'ex-n1',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: null,
-    role: 'user',
-    content: 'Build a context-map app MVP for multi-threaded AI conversations.',
-    branch_id: null,
-    timestamp: '2026-02-27T09:00:00.000Z',
-    metadata: {},
-  },
-  'ex-n2': {
-    node_id: 'ex-n2',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-n1',
-    role: 'assistant',
-    content: 'Mainline plan: data model, graph UI, branch promotion, and pattern extraction.',
-    branch_id: null,
-    timestamp: '2026-02-27T09:01:00.000Z',
-    metadata: {},
-  },
-  'ex-n3': {
-    node_id: 'ex-n3',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-n2',
-    role: 'user',
-    content: 'Start implementing store actions and view context switching.',
-    branch_id: null,
-    timestamp: '2026-02-27T09:02:00.000Z',
-    metadata: {},
-  },
-  'ex-n4': {
-    node_id: 'ex-n4',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-n3',
-    role: 'assistant',
-    content: 'Store and base path are wired; next is testing mainline endpoint selection.',
-    branch_id: null,
-    timestamp: '2026-02-27T09:03:00.000Z',
-    metadata: {},
-  },
-  'ex-r1': {
-    node_id: 'ex-r1',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-n2',
-    role: 'user',
-    content: 'Research branch: compare graph libraries and persistence options.',
-    branch_id: EXAMPLE_BRANCH_RESEARCH,
-    timestamp: '2026-02-27T09:04:00.000Z',
-    metadata: {},
-  },
-  'ex-r2': {
-    node_id: 'ex-r2',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-r1',
-    role: 'assistant',
-    content: 'Recommendation: React Flow + Zustand + SQLite for local-first prototype.',
-    branch_id: EXAMPLE_BRANCH_RESEARCH,
-    timestamp: '2026-02-27T09:05:00.000Z',
-    metadata: {},
-  },
-  'ex-a1': {
-    node_id: 'ex-a1',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-n3',
-    role: 'user',
-    content: 'Architecture branch: should branches be immutable snapshots?',
-    branch_id: EXAMPLE_BRANCH_ARCH,
-    timestamp: '2026-02-27T09:06:00.000Z',
-    metadata: {},
-  },
-  'ex-a2': {
-    node_id: 'ex-a2',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-a1',
-    role: 'assistant',
-    content: 'Keep branches mutable in MVP; promote selected branch path into mainline.',
-    branch_id: EXAMPLE_BRANCH_ARCH,
-    timestamp: '2026-02-27T09:07:00.000Z',
-    metadata: {},
-  },
-  'ex-u1': {
-    node_id: 'ex-u1',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-n1',
-    role: 'user',
-    content: 'UI branch: explore compact graph cards and context-menu actions.',
-    branch_id: EXAMPLE_BRANCH_UI,
-    timestamp: '2026-02-27T09:08:00.000Z',
-    metadata: {},
-  },
-  'ex-u2': {
-    node_id: 'ex-u2',
-    project_id: EXAMPLE_PROJECT_ID,
-    parent_id: 'ex-u1',
-    role: 'assistant',
-    content: 'Use right-click for branching, mainline start/end, and locate in chat.',
-    branch_id: EXAMPLE_BRANCH_UI,
-    timestamp: '2026-02-27T09:09:00.000Z',
-    metadata: {},
-  },
+type TutorialProjectBundle = {
+  project: Project;
+  nodes: Record<string, Node>;
+  branches: Record<string, Branch>;
+  mainline: string[];
+  context: ContextView;
+  naturalBranches: Record<string, Branch>;
 };
 
-const exampleBranches: Record<string, Branch> = {
-  [EXAMPLE_BRANCH_RESEARCH]: {
-    branch_id: EXAMPLE_BRANCH_RESEARCH,
-    project_id: EXAMPLE_PROJECT_ID,
-    anchor_node_id: 'ex-n2',
-    parent_branch_id: null,
-    status: 'active',
-  },
-  [EXAMPLE_BRANCH_ARCH]: {
-    branch_id: EXAMPLE_BRANCH_ARCH,
-    project_id: EXAMPLE_PROJECT_ID,
-    anchor_node_id: 'ex-n3',
-    parent_branch_id: null,
-    status: 'active',
-  },
-  [EXAMPLE_BRANCH_UI]: {
-    branch_id: EXAMPLE_BRANCH_UI,
-    project_id: EXAMPLE_PROJECT_ID,
-    anchor_node_id: 'ex-n1',
-    parent_branch_id: null,
-    status: 'active',
-  },
+const buildTutorialProjectBundle = (input: {
+  projectId: string;
+  contextId: string;
+  prefix: string;
+  language?: 'zh' | 'en';
+  title?: string;
+}): TutorialProjectBundle => {
+  const language = input.language ?? 'en';
+  const { projectId, contextId, prefix, title = language === 'zh' ? TUTORIAL_PROJECT_TITLE_ZH : TUTORIAL_PROJECT_TITLE } = input;
+  const nodeId = (suffix: string) => `${prefix}-${suffix}`;
+  const branchId = (suffix: string) => `${prefix}-${suffix}`;
+  const timestamp = (minuteOffset: number) => `2026-02-27T09:${String(minuteOffset).padStart(2, '0')}:00.000Z`;
+
+  const ids = {
+    n1: nodeId('n1'),
+    n2: nodeId('n2'),
+    n3: nodeId('n3'),
+    n4: nodeId('n4'),
+    n5: nodeId('n5'),
+    n6: nodeId('n6'),
+    r1: nodeId('r1'),
+    r2: nodeId('r2'),
+    a1: nodeId('a1'),
+    a2: nodeId('a2'),
+    u1: nodeId('u1'),
+    u2: nodeId('u2'),
+    branchResearch: branchId('branch-research'),
+    branchNested: branchId('branch-nested-return'),
+    branchExtract: branchId('branch-extract'),
+  };
+
+  const content =
+    language === 'zh'
+      ? {
+          n1: '我是第一次打开 Context Map。你可以把它变成一个教程，然后像陪我一起操作那样教我吗？',
+          n2: '可以。你现在看到的是主线，也就是默认正在推进的路径。先把这条路径从上往下读一遍。右边的 Context Map 会显示同一条结构，但你现在先专注看聊天流。读完以后，回来继续下一条。',
+          n3: '我已经读完主线了。下一步做什么？',
+          n4: '现在看主线里第 4 个 assistant 节点，预览文字是 `现在看主线里第 4 个 assista...`。先把鼠标悬停在上一条 assistant 消息上。你应该会看到一个 `Branch` 动作。点一下 `Branch`，从那条消息开一个 side branch。如果你之后不知道该切到哪条 branch，就去右侧画布，找到从这个节点分出去的两条分支线：右边第一张卡片预览是 `我已经进入右侧那条 branch ...`，左边第一张卡片预览是 `我试过了。除了 branch 之外...`。选中对应节点后右键，再点 `Locate`。做完以后，回来继续下一条。',
+          n5: '我试过了。除了 branch 之外，我接下来应该注意什么？',
+          n6: '接下来你会看到返回和 suggestion。右侧那条 branch 主要带你看返回，入口节点预览是 `我已经进入右侧那条 branch ...`；左侧那条 branch 主要带你体验 suggestion 和 SOP，入口节点预览是 `我试过了。除了 branch 之外...`。如果你想继续 suggestion 这条线，就沿着左侧往下，先找到 `我已经切到左侧那条 branch ...`，再继续到更下面的 assistant 节点。读完以后，先去左侧那条 branch，再自己发一句很短的话来触发一次建议。',
+          r1: '我已经进入右侧那条 branch 了，也就是右边第一张预览为 `我已经进入右侧那条 branch ...` 的节点。现在先看哪里？',
+          r2: '先看聊天区域顶部。你应该能看到返回主线（`Return to Mainline`）。当你想离开这个 branch、回到默认主线时，就用它。你现在可以点一次试试。返回以后，如果你想继续看更深一层的返回逻辑，就回到右侧这条 branch，再往下找到下一张预览为 `如果我已经在更深一层的 bra...` 的节点。',
+          a1: '如果我已经在更深一层的 branch 里，只想回上一层怎么办？你现在要找的就是右侧 branch 再往下那张预览为 `如果我已经在更深一层的 bra...` 的节点；再往下读，你会看到 assistant 节点预览是 `这时候看返回上一级（`Retu...`。',
+          a2: '这时候看返回上一级（`Return to Parent`）。它的作用是返回上一级，而不是直接回主线。你现在可以试一次。回来以后，继续顺着刚刚的 branch 往下读，然后再回主线进入下一步。',
+          u1: '我已经切到左侧那条 branch 了，也就是左边往下那张预览为 `我已经切到左侧那条 branch ...` 的节点。再继续往下，你会看到 assistant 节点预览是 `留意 assistant 消息下面的 s...`。我在这个 branch 里看到一段可复用的方法。我要怎么把它留下来？',
+          u2: '留意 assistant 消息下面的 suggestion 卡片。如果你想亲手触发一次，就在输入框直接发送：`把这段整理成可复用 SOP`。如果你看到 `Extract Reasoning` 或提炼 SOP（`Extract SOP`），点一下试试看；如果你不想接受，也可以点 `Reject`。做完以后，对照原来的对话和结果，看看系统到底提炼了什么。然后回到主线，继续你自己的 follow-up question。',
+          branchResearchSummary: '如何从消息开 branch，并返回主线？',
+          branchNestedSummary: 'Return to Parent 和 Return to Mainline 有什么区别？',
+          branchExtractSummary: '如何处理 inline extraction suggestion？',
+        }
+      : {
+          n1: 'I am opening Context Map for the first time. Can you turn this into a tutorial and teach me like we are doing it together?',
+          n2: 'Yes. Start here on the mainline. Read this path from top to bottom now. Then glance at the Context Map on the right so you can see that it mirrors the same structure. When you finish, come back and read the next message.',
+          n3: 'I have read the mainline once. What should I do next?',
+          n4: 'Now look at the 4th assistant node on the mainline. Its preview text is `Now look at the 4th assista...`. Hover over the previous assistant message in the chat. You should see a small `Branch` action appear next to it. Click `Branch` to open a side path from that message. If you later do not know which branch to enter, go to the Context Map and look for the two branch entry nodes below this point: the right one starts with `I am inside the branch on the right...`, and the left one starts with `I tried that. Besides branching...`. Select the one you want, right-click, and use `Locate`. After you do that, come back and read the next line.',
+          n5: 'I tried that. Besides branching, what other suggestions should I watch for while I use the system?',
+          n6: 'You may see suggestions such as branch, return_parent, extract_reasoning, and extract_task_sop. The branch on the right is mainly for return controls, and its entry node starts with `I am inside the branch on the right...`. The branch on the left is mainly for suggestion and SOP practice, and its entry node starts with `I tried that. Besides branching...`. If you want to continue the suggestion path, stay on the left side and move downward to the node that starts with `I have switched to the branch on the left...`, then continue to the assistant node below it. After you read them, go to the left branch and send one short message of your own.',
+          r1: 'I am inside the branch on the right now, which is the first node on the right that starts with `I am inside the branch on the right...`. What should I look at first?',
+          r2: 'Look at the top bar of the chat first. You should see `Return to Mainline` there. Use that button when you want to leave this branch and continue the default path. Click it once to test it. After that, if you want to continue the deeper return example, come back to this branch on the right and keep reading downward until you reach the next node that starts with `What if I am already inside...`.',
+          a1: 'What if I am already inside a nested branch and I only want to go up one level? The node you want next is the lower node on the right that starts with `What if I am already inside...`. Below that, the assistant node starts with `That is when `Return to Parent`...`.',
+          a2: 'That is when `Return to Parent` helps. Use it when you want to go one level up instead of all the way back to mainline. Try that control now. When you come back, keep following the tutorial from the branch you returned to, then head back to the mainline for the next step.',
+          u1: 'I have switched to the branch on the left, which is the lower-left node that starts with `I have switched to the branch on the left...`. Below that, the assistant node starts with `Watch the assistant message area...`. I found a reusable method in this branch. How do I save something useful from it?',
+          u2: 'Watch the assistant message area for inline suggestion cards. If you want to trigger one yourself, send this exact line: `Turn this into a reusable SOP.` If you see `Extract Reasoning` or `Extract SOP`, click one of them. If you do not want it, click `Reject`. After that, compare the extracted result with the source conversation, then return to the mainline and continue with your own follow-up question.',
+          branchResearchSummary: 'How do you open a branch from a message and return to mainline?',
+          branchNestedSummary: 'How does Return to Parent differ from Return to Mainline?',
+          branchExtractSummary: 'How do inline extraction suggestions work?',
+        };
+
+  const nodes: Record<string, Node> = {
+    [ids.n1]: {
+      node_id: ids.n1,
+      project_id: projectId,
+      parent_id: null,
+      role: 'user',
+      content: content.n1,
+      branch_id: null,
+      timestamp: timestamp(0),
+      metadata: {},
+    },
+    [ids.n2]: {
+      node_id: ids.n2,
+      project_id: projectId,
+      parent_id: ids.n1,
+      role: 'assistant',
+      content: content.n2,
+      branch_id: null,
+      timestamp: timestamp(1),
+      metadata: {},
+    },
+    [ids.n3]: {
+      node_id: ids.n3,
+      project_id: projectId,
+      parent_id: ids.n2,
+      role: 'user',
+      content: content.n3,
+      branch_id: null,
+      timestamp: timestamp(2),
+      metadata: {},
+    },
+    [ids.n4]: {
+      node_id: ids.n4,
+      project_id: projectId,
+      parent_id: ids.n3,
+      role: 'assistant',
+      content: content.n4,
+      branch_id: null,
+      timestamp: timestamp(3),
+      metadata: {},
+    },
+    [ids.n5]: {
+      node_id: ids.n5,
+      project_id: projectId,
+      parent_id: ids.n4,
+      role: 'user',
+      content: content.n5,
+      branch_id: null,
+      timestamp: timestamp(4),
+      metadata: {},
+    },
+    [ids.n6]: {
+      node_id: ids.n6,
+      project_id: projectId,
+      parent_id: ids.n5,
+      role: 'assistant',
+      content: content.n6,
+      branch_id: null,
+      timestamp: timestamp(5),
+      metadata: {},
+    },
+    [ids.r1]: {
+      node_id: ids.r1,
+      project_id: projectId,
+      parent_id: ids.n4,
+      role: 'user',
+      content: content.r1,
+      branch_id: ids.branchResearch,
+      timestamp: timestamp(6),
+      metadata: {},
+    },
+    [ids.r2]: {
+      node_id: ids.r2,
+      project_id: projectId,
+      parent_id: ids.r1,
+      role: 'assistant',
+      content: content.r2,
+      branch_id: ids.branchResearch,
+      timestamp: timestamp(7),
+      metadata: {},
+    },
+    [ids.a1]: {
+      node_id: ids.a1,
+      project_id: projectId,
+      parent_id: ids.r2,
+      role: 'user',
+      content: content.a1,
+      branch_id: ids.branchNested,
+      timestamp: timestamp(8),
+      metadata: {},
+    },
+    [ids.a2]: {
+      node_id: ids.a2,
+      project_id: projectId,
+      parent_id: ids.a1,
+      role: 'assistant',
+      content: content.a2,
+      branch_id: ids.branchNested,
+      timestamp: timestamp(9),
+      metadata: {},
+    },
+    [ids.u1]: {
+      node_id: ids.u1,
+      project_id: projectId,
+      parent_id: ids.n6,
+      role: 'user',
+      content: content.u1,
+      branch_id: ids.branchExtract,
+      timestamp: timestamp(10),
+      metadata: {},
+    },
+    [ids.u2]: {
+      node_id: ids.u2,
+      project_id: projectId,
+      parent_id: ids.u1,
+      role: 'assistant',
+      content: content.u2,
+      branch_id: ids.branchExtract,
+      timestamp: timestamp(11),
+      metadata: {},
+    },
+  };
+
+  const branches: Record<string, Branch> = {
+    [ids.branchResearch]: {
+      branch_id: ids.branchResearch,
+      project_id: projectId,
+      anchor_node_id: ids.n4,
+      parent_branch_id: null,
+      status: 'active',
+      intent_summary: content.branchResearchSummary,
+    },
+    [ids.branchNested]: {
+      branch_id: ids.branchNested,
+      project_id: projectId,
+      anchor_node_id: ids.r2,
+      parent_branch_id: ids.branchResearch,
+      status: 'active',
+      intent_summary: content.branchNestedSummary,
+    },
+    [ids.branchExtract]: {
+      branch_id: ids.branchExtract,
+      project_id: projectId,
+      anchor_node_id: ids.n6,
+      parent_branch_id: null,
+      status: 'active',
+      intent_summary: content.branchExtractSummary,
+    },
+  };
+
+  const mainline = [ids.n1, ids.n2, ids.n3, ids.n4, ids.n5, ids.n6];
+
+  return {
+    project: {
+      project_id: projectId,
+      title,
+      root_node_id: ids.n1,
+      mainline_id: `mainline_${projectId}`,
+      active_context_id: contextId,
+    },
+    nodes,
+    branches,
+    mainline,
+    context: {
+      context_id: contextId,
+      project_id: projectId,
+      base_path: 'mainline',
+      included_nodes: [],
+      excluded_nodes: [],
+      enabled_patterns_by_type: {},
+    },
+    naturalBranches: branches,
+  };
 };
+
+const exampleBundle = buildTutorialProjectBundle({
+  projectId: EXAMPLE_PROJECT_ID,
+  contextId: EXAMPLE_CONTEXT_ID,
+  prefix: 'ex',
+  language: 'en',
+});
+
+const exampleNodes = exampleBundle.nodes;
+const exampleBranches = exampleBundle.branches;
 
 const MAX_STRUCTURE_HISTORY = 2;
 const STORE_PERSIST_KEY = 'context-map.app-state.v1';
@@ -888,11 +1026,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   projects: seedExampleData
     ? {
         [EXAMPLE_PROJECT_ID]: {
-          project_id: EXAMPLE_PROJECT_ID,
-          title: 'Example Project - Mainline & Branches',
-          root_node_id: 'ex-n1',
-          mainline_id: `mainline_${EXAMPLE_PROJECT_ID}`,
-          active_context_id: EXAMPLE_CONTEXT_ID,
+          ...exampleBundle.project,
         },
       }
     : {},
@@ -900,19 +1034,12 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   branches: seedExampleData ? exampleBranches : {},
   mainlines: seedExampleData
     ? {
-        [EXAMPLE_PROJECT_ID]: ['ex-n1', 'ex-n2', 'ex-n3', 'ex-n4'],
+        [EXAMPLE_PROJECT_ID]: exampleBundle.mainline,
       }
     : {},
   contexts: seedExampleData
     ? {
-        [EXAMPLE_CONTEXT_ID]: {
-          context_id: EXAMPLE_CONTEXT_ID,
-          project_id: EXAMPLE_PROJECT_ID,
-          base_path: 'mainline',
-          included_nodes: [],
-          excluded_nodes: [],
-          enabled_patterns_by_type: {},
-        },
+        [EXAMPLE_CONTEXT_ID]: exampleBundle.context,
       }
     : {},
   patterns: {},
@@ -920,10 +1047,10 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   futureStructureSnapshots: [],
   naturalMainlines: seedExampleData
     ? {
-        [EXAMPLE_PROJECT_ID]: ['ex-n1', 'ex-n2', 'ex-n3', 'ex-n4'],
+        [EXAMPLE_PROJECT_ID]: exampleBundle.mainline,
       }
     : {},
-  naturalBranches: seedExampleData ? exampleBranches : {},
+  naturalBranches: seedExampleData ? exampleBundle.naturalBranches : {},
   deletedNodeIds: [],
   isNodeSelectionMode: false,
   nodeSelectionIntent: 'batch',
@@ -956,6 +1083,31 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       mainlines: { ...state.mainlines, [projectId]: [] },
       naturalMainlines: { ...state.naturalMainlines, [projectId]: [] },
       contexts: { ...state.contexts, [contextId]: newContext },
+      activeProjectId: projectId,
+    }));
+
+    return projectId;
+  },
+
+  importTutorialProject: (language = 'en') => {
+    const projectId = uuidv4();
+    const contextId = uuidv4();
+    const prefix = `tutorial-${projectId.slice(0, 8)}`;
+    const bundle = buildTutorialProjectBundle({
+      projectId,
+      contextId,
+      prefix,
+      language,
+    });
+
+    set((state) => ({
+      projects: { ...state.projects, [projectId]: bundle.project },
+      nodes: { ...state.nodes, ...bundle.nodes },
+      branches: { ...state.branches, ...bundle.branches },
+      mainlines: { ...state.mainlines, [projectId]: bundle.mainline },
+      contexts: { ...state.contexts, [contextId]: bundle.context },
+      naturalMainlines: { ...state.naturalMainlines, [projectId]: bundle.mainline },
+      naturalBranches: { ...state.naturalBranches, ...bundle.naturalBranches },
       activeProjectId: projectId,
     }));
 

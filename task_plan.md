@@ -185,3 +185,34 @@ Capture a compressed version of the full visible conversation context inside sug
 ### Constraints
 - Keep `visible_context` capped and compressed to avoid large-row performance issues.
 - Preserve existing `current_tldr`, `history_last_3_qa`, and `current_node` fields for quick analytics.
+
+## Follow-up: Persist Project Rename Across Refresh
+
+### Goal
+Ensure renaming a project survives refresh and remote recovery even when Supabase only allows insert/select on `chat_history`.
+
+### Phases
+- [x] Reproduce the rename regression against current remote sync behavior
+- [x] Add a failing regression test for remote project-title recovery after rename
+- [x] Replace fragile patch-only rename sync with an insert-compatible rename marker flow
+- [x] Verify tests and document any schema/policy implications
+
+### Fix Summary
+- Confirmed the old rename path relied on `PATCH chat_history`, which does not actually persist under the current anon insert/select policy setup.
+- Added append-only rename marker records to `chat_history` carrying the latest `project_title`.
+- Updated reconstruction to use rename markers for title recovery while excluding those markers from visible recovered nodes/mainline.
+
+## Follow-up: Tutorial Example Seed
+
+### Goal
+Replace the current generic example project with a first-run tutorial conversation that teaches new users how to read the mainline, inspect branches, return to parent, and understand extraction suggestions.
+
+### Phases
+- [x] Add a failing regression test for tutorial-oriented example seed content
+- [x] Replace the seeded mainline/branch dialogue in `src/store.ts`
+- [x] Verify the seed test, lint, and build
+
+### Constraints
+- Keep the existing seed trigger behavior (`user_id === test` or no persisted state).
+- Do not change the actual store schema; only replace the seeded content and relationships.
+- Use at least one nested branch so `return_parent` can be demonstrated realistically.

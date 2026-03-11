@@ -85,7 +85,7 @@ export default function ProjectList() {
     <div className="relative flex flex-col h-full bg-zinc-50">
       <div className="px-4 py-3 font-semibold text-zinc-800 border-b border-zinc-200 flex items-center gap-2">
         <Folder size={18} />
-        Projects
+        <span>Projects</span>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">

@@ -20,6 +20,8 @@
     "test:branch-feedback-sync": "tsx scripts/test-branch-feedback-sync.ts",
     "test:structure-suggestion-feedback-sync": "tsx scripts/test-structure-suggestion-feedback-sync.ts",
     "test:chat-history-sync": "tsx scripts/test-chat-history-sync.ts",
+    "test:example-seed": "tsx scripts/test-example-seed.ts",
+    "test:import-tutorial": "tsx scripts/test-import-tutorial.ts",
     "test:pattern-extraction": "tsx scripts/test-pattern-extraction.ts",
     "test:structure-suggestion": "tsx scripts/test-structure-suggestion.ts",
     "test:gemini-provider": "tsx scripts/test-gemini-provider.ts",
