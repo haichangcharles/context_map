@@ -16,6 +16,7 @@ export type StructureSuggestionFeedbackEvent = {
   origin_kind: StructureSuggestionOriginKind;
   decision: StructureSuggestionDecision;
   current_tldr: string;
+  visible_context?: QAPair[];
   history_last_3_qa: QAPair[];
   current_node: QAPair;
   suggestion_payload: Record<string, unknown>;

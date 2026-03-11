@@ -186,6 +186,7 @@ create table if not exists public.branch_feedback (
   sample_id text primary key,
   user_id text not null,
   current_tldr text not null default '',
+  visible_context jsonb not null default '[]'::jsonb,
   history_last_3_qa jsonb not null default '[]'::jsonb,
   current_node jsonb not null default '{}'::jsonb,
   level integer not null default 1,
@@ -210,6 +211,13 @@ to anon
 using (true);
 ```
 
+If you already created `branch_feedback` before adding full visible context, run:
+
+```sql
+alter table public.branch_feedback
+add column if not exists visible_context jsonb not null default '[]'::jsonb;
+```
+
 Also create the structure suggestion feedback sync table:
 
 ```sql
@@ -224,6 +232,7 @@ create table if not exists public.structure_suggestion_feedback (
   origin_kind text not null,
   decision text not null,
   current_tldr text not null default '',
+  visible_context jsonb not null default '[]'::jsonb,
   history_last_3_qa jsonb not null default '[]'::jsonb,
   current_node jsonb not null default '{}'::jsonb,
   suggestion_payload jsonb not null default '{}'::jsonb,
@@ -254,6 +263,13 @@ on public.structure_suggestion_feedback
 for select
 to anon
 using (true);
+```
+
+If you already created `structure_suggestion_feedback` before adding full visible context, run:
+
+```sql
+alter table public.structure_suggestion_feedback
+add column if not exists visible_context jsonb not null default '[]'::jsonb;
 ```
 
 The app stores messages and patterns in `localStorage` first, then upserts to Supabase when network/env is available.

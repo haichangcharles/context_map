@@ -11,6 +11,7 @@ export type QAPair = {
 export type BranchFeedbackSample = {
   sample_id?: string;
   current_tldr: string;
+  visible_context?: QAPair[];
   history_last_3_qa: QAPair[];
   current_node: QAPair;
   level: number;
@@ -134,6 +135,7 @@ const createSampleId = (): string => {
 
 const sampleFingerprint = (sample: BranchFeedbackSample): string => JSON.stringify({
   current_tldr: sample.current_tldr,
+  visible_context: sample.visible_context,
   history_last_3_qa: sample.history_last_3_qa,
   current_node: sample.current_node,
   level: sample.level,

@@ -170,3 +170,18 @@ Persist non-branch AI suggestion interactions (`return_parent`, `extract_reasoni
 - Added a dedicated `structure_suggestion_feedback` sync service with append-only events keyed by `event_id` and grouped by `suggestion_id`.
 - Wired `ConversationStream` to log `shown`, `accepted`, `rejected`, `ignored`, and `expired` decisions for `return_parent`, `extract_reasoning`, and `extract_task_sop`.
 - Preserved the existing branch-feedback dataset path while adding separate analytics for non-branch AI suggestions, including branch-attached extract suggestions.
+
+## Follow-up: Store Full Visible Context
+
+### Goal
+Capture a compressed version of the full visible conversation context inside suggestion-feedback records so downstream training has richer state without making each row unbounded.
+
+### Phases
+- [x] Add regression expectations for `visible_context` in feedback payloads
+- [x] Extend feedback record types and runtime payloads
+- [x] Capture capped visible QA pairs from `ConversationStream`
+- [x] Document the required Supabase column additions
+
+### Constraints
+- Keep `visible_context` capped and compressed to avoid large-row performance issues.
+- Preserve existing `current_tldr`, `history_last_3_qa`, and `current_node` fields for quick analytics.

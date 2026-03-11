@@ -25,6 +25,10 @@ const baseRecord: BranchFeedbackSyncRecord = {
   sample_id: 'sample-1',
   user_id: 'user-1',
   current_tldr: 'Launch planning branch',
+  visible_context: [
+    { user: 'What should we ship first?', assistant: 'Start with onboarding.' },
+    { user: 'Can we compare variants?', assistant: 'Yes, compare activation and retention.' },
+  ],
   history_last_3_qa: [
     { user: 'What should we ship first?', assistant: 'Start with onboarding.' },
   ],
@@ -58,6 +62,7 @@ const run = async () => {
 
   runtime.appendSample({
     current_tldr: baseRecord.current_tldr,
+    visible_context: baseRecord.visible_context,
     history_last_3_qa: baseRecord.history_last_3_qa,
     current_node: baseRecord.current_node,
     level: baseRecord.level,
@@ -70,6 +75,7 @@ const run = async () => {
   assert.equal(localDataset.should_branch.length, 1);
   assert.equal(localDataset.should_branch[0]?.behaviour_source, 'accept_branch');
   assert.ok(localDataset.should_branch[0]?.sample_id, 'new local samples should get a stable sample_id');
+  assert.equal(localDataset.should_branch[0]?.visible_context?.length, 2);
 
   let syncState = runtime.readSyncState();
   assert.equal(syncState.pending_count, 1);
@@ -82,6 +88,7 @@ const run = async () => {
   assert.equal(firstBatch[0]?.user_id, 'user-1');
   assert.equal(firstBatch[0]?.behaviour_source, 'accept_branch');
   assert.ok(firstBatch[0]?.sample_id);
+  assert.equal(firstBatch[0]?.visible_context?.length, 2);
 
   syncState = runtime.readSyncState();
   assert.equal(syncState.pending_count, 0);

@@ -32,6 +32,10 @@ const baseEvent: StructureSuggestionFeedbackEvent = {
   origin_kind: 'structure',
   decision: 'shown',
   current_tldr: 'Evaluate launch branch',
+  visible_context: [
+    { user: 'What about pricing?', assistant: 'We should compare tiers.' },
+    { user: 'Do we still need this branch?', assistant: 'It may be complete now.' },
+  ],
   history_last_3_qa: [
     { user: 'What about pricing?', assistant: 'We should compare tiers.' },
   ],
@@ -74,6 +78,7 @@ const run = async () => {
     origin_kind: baseEvent.origin_kind,
     decision: baseEvent.decision,
     current_tldr: baseEvent.current_tldr,
+    visible_context: baseEvent.visible_context,
     history_last_3_qa: baseEvent.history_last_3_qa,
     current_node: baseEvent.current_node,
     suggestion_payload: baseEvent.suggestion_payload,
@@ -86,6 +91,7 @@ const run = async () => {
   assert.equal(localHistory[0]?.suggestion_kind, 'return_parent');
   assert.equal(localHistory[0]?.decision, 'shown');
   assert.ok(localHistory[0]?.event_id);
+  assert.equal(localHistory[0]?.visible_context?.length, 2);
 
   let syncState = runtime.readSyncState();
   assert.equal(syncState.pending_count, 1);
@@ -97,6 +103,7 @@ const run = async () => {
   assert.equal(firstBatch.length, 1);
   assert.equal(firstBatch[0]?.suggestion_kind, 'return_parent');
   assert.equal(firstBatch[0]?.decision, 'shown');
+  assert.equal(firstBatch[0]?.visible_context?.length, 2);
 
   runtime.logEvent({
     suggestion_id: baseEvent.suggestion_id,
@@ -107,6 +114,7 @@ const run = async () => {
     origin_kind: baseEvent.origin_kind,
     decision: 'accepted',
     current_tldr: baseEvent.current_tldr,
+    visible_context: baseEvent.visible_context,
     history_last_3_qa: baseEvent.history_last_3_qa,
     current_node: baseEvent.current_node,
     suggestion_payload: baseEvent.suggestion_payload,

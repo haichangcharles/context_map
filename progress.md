@@ -266,3 +266,18 @@
 | Branch feedback regression | `npm run test:branch-feedback-sync` | Existing branch feedback sync still passes | Passed | ✓ |
 | Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
 | Production build | `npm run build` | App builds successfully with structure-suggestion sync wiring | Passed, with existing chunk-size warning only | ✓ |
+
+### Follow-up Feature: Store full visible context in feedback
+- **Status:** complete
+- Actions taken:
+  - Extended feedback record types so both branch feedback and structure-suggestion feedback can carry `visible_context`.
+  - Updated `ConversationStream.tsx` to capture the visible QA sequence, cap it to 48 pairs, and clip each side to 360 characters.
+  - Kept the smaller summary fields (`current_tldr`, `history_last_3_qa`, `current_node`) alongside the fuller `visible_context` payload.
+  - Documented the required `alter table ... add column if not exists visible_context jsonb` migrations in `README.md`.
+- Files created/modified:
+  - `src/utils/branchFeedbackDataset.ts`
+  - `src/services/structureSuggestionFeedback.ts`
+  - `src/components/ConversationStream.tsx`
+  - `README.md`
+  - `task_plan.md`
+  - `progress.md`

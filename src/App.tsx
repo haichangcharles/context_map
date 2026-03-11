@@ -198,9 +198,9 @@ export default function App() {
           onSubmit={handleConfirmUserId}
           className="w-full max-w-md bg-white border border-zinc-200 rounded-2xl shadow-sm p-6 space-y-4"
         >
-          <h1 className="text-lg font-semibold">Enter User ID</h1>
+          <h1 className="text-lg font-semibold">Enter Your Username</h1>
           <p className="text-sm text-zinc-600">
-            Please enter your user id before starting. Branch feedback data will be stored under this id.
+            Please enter your user name before starting. Branch feedback data will be stored under this id.
           </p>
           <input
             value={userIdInput}

@@ -17,6 +17,7 @@ import { buildConversationSystemPrompt } from '../utils/promptBuilders';
 type SuggestionFeedbackContext = {
   projectId: string;
   currentTLDR: string;
+  visibleContext: QAPair[];
   historyLast3QA: QAPair[];
   currentNode: QAPair;
 };
@@ -57,6 +58,13 @@ type PendingStructureSuggestion = {
 };
 
 const createSuggestionId = () => `suggestion-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const MAX_VISIBLE_CONTEXT_PAIRS = 48;
+const MAX_VISIBLE_CONTEXT_TEXT = 360;
+
+const clipContextPair = (pair: QAPair): QAPair => ({
+  user: (pair.user || '').slice(0, MAX_VISIBLE_CONTEXT_TEXT),
+  assistant: (pair.assistant || '').slice(0, MAX_VISIBLE_CONTEXT_TEXT),
+});
 
 const PATTERN_TYPE_ORDER: PatternType[] = ['reasoning', 'task_sop', 'context_case'];
 const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
@@ -484,7 +492,10 @@ export default function ConversationStream() {
   const selectedNodeIdSet = new Set(selectedNodeIds);
 
   const buildSuggestionFeedbackContext = (userNode?: Node | null, assistantNode?: Node | null): SuggestionFeedbackContext => {
-    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
+    const visibleContext = buildQAPairsFromOrderedNodes(visibleNodes)
+      .slice(-MAX_VISIBLE_CONTEXT_PAIRS)
+      .map(clipContextPair);
+    const historyPairs = visibleContext.slice(-3);
     const currentTLDR = !isMainline && currentBranch
       ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
       : summarizeRecent(visibleNodes.map((n) => n.content), 160);
@@ -492,6 +503,7 @@ export default function ConversationStream() {
     return {
       projectId: project.project_id,
       currentTLDR,
+      visibleContext,
       historyLast3QA: historyPairs,
       currentNode: buildQAPair(userNode, assistantNode),
     };
@@ -520,6 +532,7 @@ export default function ConversationStream() {
       origin_kind: options?.originKind ?? 'structure',
       decision,
       current_tldr: feedbackContext.currentTLDR,
+      visible_context: feedbackContext.visibleContext,
       history_last_3_qa: feedbackContext.historyLast3QA,
       current_node: feedbackContext.currentNode,
       suggestion_payload: options?.suggestionPayload || {},
@@ -615,16 +628,14 @@ export default function ConversationStream() {
     if (pendingBranchSuggestion) {
       const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
       const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
-      const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
-      const currentTLDR = !isMainline && currentBranch
-        ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
-        : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+      const feedbackContext = buildSuggestionFeedbackContext(movedUser, movedAssistant);
 
       const ignoreLevel = getCurrentLevel(isMainline, currentBranch, branches);
       appendBranchFeedbackSample({
-        current_tldr: currentTLDR,
-        history_last_3_qa: historyPairs,
-        current_node: buildQAPair(movedUser, movedAssistant),
+        current_tldr: feedbackContext.currentTLDR,
+        visible_context: feedbackContext.visibleContext,
+        history_last_3_qa: feedbackContext.historyLast3QA,
+        current_node: feedbackContext.currentNode,
         level: ignoreLevel,
         user_behaviour: 'same_thread',
         behaviour_source: 'ignore_branch',
@@ -1056,16 +1067,17 @@ export default function ConversationStream() {
       const assistantChild = Object.values(nodes).find((n) => n.parent_id === anchorNode.node_id && n.role === 'assistant');
       currentPair = buildQAPair(anchorNode, assistantChild || null);
     }
-    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
-    const currentTLDR = !isMainline && currentBranch
-      ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
-      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+    const feedbackContext = buildSuggestionFeedbackContext(
+      currentPair.user ? anchorNode : null,
+      currentPair.assistant ? (anchorNode?.role === 'assistant' ? anchorNode : Object.values(nodes).find((n) => n.parent_id === anchorNode?.node_id && n.role === 'assistant') || null) : null
+    );
 
     const manualLevel = getCurrentLevel(isMainline, currentBranch, branches);
     const manualSample = {
-      current_tldr: currentTLDR,
-      history_last_3_qa: historyPairs,
-      current_node: currentPair,
+      current_tldr: feedbackContext.currentTLDR,
+      visible_context: feedbackContext.visibleContext,
+      history_last_3_qa: feedbackContext.historyLast3QA,
+      current_node: feedbackContext.currentNode,
       level: manualLevel,
       user_behaviour: 'branch',
       behaviour_source: 'manually_branch',
@@ -1129,16 +1141,14 @@ export default function ConversationStream() {
 
     const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
     const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
-    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
-    const currentTLDR = !isMainline && currentBranch
-      ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
-      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+    const feedbackContext = buildSuggestionFeedbackContext(movedUser, movedAssistant);
 
     const acceptLevel = getCurrentLevel(isMainline, currentBranch, branches);
     const acceptSample = {
-      current_tldr: currentTLDR,
-      history_last_3_qa: historyPairs,
-      current_node: buildQAPair(movedUser, movedAssistant),
+      current_tldr: feedbackContext.currentTLDR,
+      visible_context: feedbackContext.visibleContext,
+      history_last_3_qa: feedbackContext.historyLast3QA,
+      current_node: feedbackContext.currentNode,
       level: acceptLevel,
       user_behaviour: 'branch',
       behaviour_source: 'accept_branch',
@@ -1205,16 +1215,14 @@ export default function ConversationStream() {
     if (!pendingBranchSuggestion) return;
     const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
     const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
-    const historyPairs = buildQAPairsFromOrderedNodes(visibleNodes).slice(-3);
-    const currentTLDR = !isMainline && currentBranch
-      ? currentBranch.intent_summary || currentBranch.parent_context_tldr || summarizeRecent(visibleNodes.map((n) => n.content), 160)
-      : summarizeRecent(visibleNodes.map((n) => n.content), 160);
+    const feedbackContext = buildSuggestionFeedbackContext(movedUser, movedAssistant);
 
     const rejectLevel = getCurrentLevel(isMainline, currentBranch, branches);
     appendBranchFeedbackSample({
-      current_tldr: currentTLDR,
-      history_last_3_qa: historyPairs,
-      current_node: buildQAPair(movedUser, movedAssistant),
+      current_tldr: feedbackContext.currentTLDR,
+      visible_context: feedbackContext.visibleContext,
+      history_last_3_qa: feedbackContext.historyLast3QA,
+      current_node: feedbackContext.currentNode,
       level: rejectLevel,
       user_behaviour: 'same_thread',
       behaviour_source: 'reject_branch',
