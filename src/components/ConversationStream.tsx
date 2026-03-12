@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store';
 import { Node, Branch, Pattern, PatternType } from '../types';
-import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Square, X, Check, TriangleAlert, ChevronLeft, ChevronRight, Rows3 } from 'lucide-react';
+import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Square, X, Check, TriangleAlert, ChevronLeft, ChevronRight, Rows3, Pencil } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import { detectStructureSuggestion, extractPatternByType, generateResponseStream, generateMainlineSummary } from '../services/gemini';
@@ -204,11 +204,15 @@ const summarizeRecent = (items: string[], max = 160): string => {
   return merged.slice(0, max);
 };
 
+const isNodeEdited = (node: Node): boolean => !!node.metadata.edited_at;
+
 const getStreamCharLimit = (): number => {
   const raw = Number(import.meta.env.VITE_MAX_STREAM_CHARS || 0);
   if (!Number.isFinite(raw) || raw <= 0) return 0;
   return Math.floor(raw);
 };
+
+const MESSAGE_BUBBLE_HORIZONTAL_PADDING = 40;
 
 const getCurrentLevel = (isMainline: boolean, currentBranch: Branch | null, allBranches: Record<string, Branch>): number => {
   if (isMainline || !currentBranch) return 1;
@@ -238,6 +242,7 @@ export default function ConversationStream() {
     addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, returnToParentBranch, toggleNodeInclusion,
     updateBranchSummary, updatePattern, approvePattern, deletePattern, createPattern,
     enablePatternForType, disablePatternForType, updateNodeContent,
+    editNodeContent,
     isNodeSelectionMode, nodeSelectionIntent, selectedNodeIds, toggleNodeSelection
   } = useAppStore();
   
@@ -248,6 +253,8 @@ export default function ConversationStream() {
   const [branchSuggestionNotice, setBranchSuggestionNotice] = useState<string | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const editingTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editingActionsRef = useRef<HTMLDivElement | null>(null);
   const wasAutoTruncatedRef = useRef(false);
   const wasManuallyTruncatedRef = useRef(false);
   
@@ -261,11 +268,36 @@ export default function ConversationStream() {
   const [patternPage, setPatternPage] = useState(0);
   const [structureActionInFlight, setStructureActionInFlight] = useState<'return' | 'extract' | null>(null);
   const [activeInlineSuggestionIndex, setActiveInlineSuggestionIndex] = useState(0);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [editingDraft, setEditingDraft] = useState('');
+  const [editingBubbleWidth, setEditingBubbleWidth] = useState<number | null>(null);
+  const [editingActionsWidth, setEditingActionsWidth] = useState<number | null>(null);
 
   const handleTruncateOutput = () => {
     if (!isLoading) return;
     wasManuallyTruncatedRef.current = true;
     streamAbortRef.current?.abort();
+  };
+
+  const startEditingNode = (node: Node) => {
+    if (isLoading && node.role === 'assistant' && node.content.trim() === '') return;
+    const bubble = document.getElementById(`message-bubble-${node.node_id}`);
+    setEditingBubbleWidth(bubble ? Math.ceil(bubble.getBoundingClientRect().width) : null);
+    setEditingNodeId(node.node_id);
+    setEditingDraft(node.content);
+  };
+
+  const cancelEditingNode = () => {
+    setEditingNodeId(null);
+    setEditingDraft('');
+    setEditingBubbleWidth(null);
+    setEditingActionsWidth(null);
+  };
+
+  const saveEditingNode = () => {
+    if (!editingNodeId) return;
+    editNodeContent(editingNodeId, editingDraft);
+    cancelEditingNode();
   };
 
   useEffect(() => {
@@ -299,6 +331,27 @@ export default function ConversationStream() {
   useEffect(() => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [nodes, context?.base_path]);
+
+  useEffect(() => {
+    if (!editingNodeId) return;
+    if (!nodes[editingNodeId]) {
+      cancelEditingNode();
+    }
+  }, [editingNodeId, nodes]);
+
+  useEffect(() => {
+    const textarea = editingTextareaRef.current;
+    if (!textarea || !editingNodeId) return;
+    textarea.style.height = '0px';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [editingDraft, editingNodeId]);
+
+  useEffect(() => {
+    const actions = editingActionsRef.current;
+    if (!actions || !editingNodeId) return;
+    const naturalWidth = actions.getBoundingClientRect().width;
+    setEditingActionsWidth(Math.ceil(naturalWidth));
+  }, [editingNodeId, editingDraft]);
 
   // Generate branch summary when entering a new branch
   useEffect(() => {
@@ -1713,6 +1766,8 @@ export default function ConversationStream() {
           </div>
         ) : (
           visibleNodes.map((node) => {
+            const edited = isNodeEdited(node);
+            const isEditingNode = editingNodeId === node.node_id;
             const isExcluded = context.excluded_nodes.includes(node.node_id);
             const isSelectionActive = isNodeSelectionMode;
             const isSelectedNode = selectedNodeIdSet.has(node.node_id);
@@ -1789,6 +1844,11 @@ export default function ConversationStream() {
                       Excluded from Context
                     </span>
                   )}
+                  {edited && (
+                    <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-sm">
+                      Edited
+                    </span>
+                  )}
                   {/* Re-branch button (visible on hover) */}
                   {!isSelectionActive && (
                     <button
@@ -1811,8 +1871,19 @@ export default function ConversationStream() {
                       Context
                     </button>
                   )}
+                  {!isSelectionActive && node.role !== 'system' && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); startEditingNode(node); }}
+                      className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-amber-600 transition-all text-xs flex items-center gap-1"
+                      title="Edit message"
+                    >
+                      <Pencil size={12} />
+                      Edit
+                    </button>
+                  )}
                 </div>
                 <div
+                  id={`message-bubble-${node.node_id}`}
                   className={clsx(
                     "px-5 py-3.5 rounded-2xl shadow-sm max-w-[85%] text-[15px] leading-relaxed border-2 transition-colors",
                     node.role === 'user'
@@ -1825,8 +1896,64 @@ export default function ConversationStream() {
                     isSelectedNode && nodeSelectionIntent === 'delete' && "border-rose-500 ring-2 ring-rose-200",
                     isSelectedNode && nodeSelectionIntent === 'batch' && "border-sky-500 ring-2 ring-sky-200"
                   )}
+                  style={
+                    isEditingNode && (editingBubbleWidth || editingActionsWidth)
+                      ? {
+                          width: `${Math.max(
+                            editingBubbleWidth ?? 0,
+                            (editingActionsWidth ?? 0) + MESSAGE_BUBBLE_HORIZONTAL_PADDING
+                          )}px`,
+                        }
+                      : undefined
+                  }
                 >
-                  {node.role === 'assistant' && node.content.trim() === '' ? (
+                  {isEditingNode ? (
+                    <div className="space-y-3">
+                      <textarea
+                        ref={editingTextareaRef}
+                        value={editingDraft}
+                        onChange={(e) => setEditingDraft(e.target.value)}
+                        rows={1}
+                        className="block w-full overflow-hidden border-0 bg-transparent p-0 text-[15px] leading-relaxed outline-none focus:outline-none focus:ring-0"
+                        style={{
+                          color: 'inherit',
+                          backgroundColor: 'transparent',
+                          caretColor: node.role === 'user' ? '#f8fafc' : '#18181b',
+                        }}
+                      />
+                      <div
+                        className="flex items-center justify-end gap-2 border-t pt-2"
+                        style={{
+                          borderColor: node.role === 'user' ? 'rgba(248,250,252,0.18)' : 'rgba(24,24,27,0.08)',
+                        }}
+                      >
+                        <div ref={editingActionsRef} className="ml-auto inline-flex items-center gap-2">
+                          <button
+                            onClick={cancelEditingNode}
+                            className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                            style={{
+                              color: node.role === 'user' ? '#f4f4f5' : '#3f3f46',
+                              backgroundColor: node.role === 'user' ? 'rgba(255,255,255,0.08)' : '#ffffff',
+                              border: node.role === 'user' ? '1px solid rgba(255,255,255,0.14)' : '1px solid #d4d4d8',
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={saveEditingNode}
+                            className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                            style={{
+                              color: node.role === 'user' ? '#18181b' : '#ffffff',
+                              backgroundColor: node.role === 'user' ? '#f4f4f5' : '#18181b',
+                              border: '1px solid transparent',
+                            }}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : node.role === 'assistant' && node.content.trim() === '' ? (
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                       <div className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />

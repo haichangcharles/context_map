@@ -4,11 +4,13 @@ import { ReactFlow, Background, Controls, Node as FlowNode, Edge, Position, Mark
 import '@xyflow/react/dist/style.css';
 import { Node, Branch, PatternType, SelectionNotice, DeleteSelectionPreview } from '../types';
 import clsx from 'clsx';
-import { Eye, EyeOff, GitBranch, Undo2, Redo2, RotateCcw, History, ArrowRightLeft, X, Info, CheckCircle2, TriangleAlert, CircleAlert, Trash2, Plus, Minus, MousePointerSquareDashed, Rows3, Sparkles } from 'lucide-react';
+import { Eye, EyeOff, GitBranch, Undo2, Redo2, RotateCcw, History, ArrowRightLeft, X, Info, CheckCircle2, TriangleAlert, CircleAlert, Trash2, Plus, Minus, MousePointerSquareDashed, Rows3, Sparkles, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import dagre from 'dagre';
 import { buildQAPair, logBranchDebug, logContextMapDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { extractPatternByType } from '../services/gemini';
 import { CONTEXT_MAP_SELECTION_BODY_CLASS, syncBodyClassToggle } from '../utils/contextMapInteraction';
+import { getProjectNodeSearchResults, stepNodeSearchIndex } from '../utils/nodeSearch';
+import { getNodeIdsIntersectingSelectionRect } from '../utils/selectionState';
 
 // Custom Node Component
 const CustomNode = ({ data }: { data: any }) => {
@@ -19,6 +21,8 @@ const CustomNode = ({ data }: { data: any }) => {
   const isSelected = data.isSelected;
   const isDeleteSelected = data.isDeleteSelected;
   const isPlaceholder = data.isPlaceholder;
+  const isSearchMatch = data.isSearchMatch;
+  const isSearchCurrent = data.isSearchCurrent;
   
   return (
     <div 
@@ -27,6 +31,8 @@ const CustomNode = ({ data }: { data: any }) => {
         isActive ? "border-indigo-500 bg-indigo-50" : "border-zinc-200 bg-white",
         isExcluded && "opacity-50 border-dashed border-red-300 bg-red-50",
         isIncluded && !isActive && "border-emerald-500 bg-emerald-50",
+        isSearchMatch && !isSearchCurrent && "border-amber-400 bg-amber-50 ring-2 ring-amber-100 ring-offset-1",
+        isSearchCurrent && "border-amber-500 bg-amber-100 ring-4 ring-amber-300 ring-offset-2 shadow-[0_0_0_1px_rgba(245,158,11,0.28)]",
         isSelected && !isDeleteSelected && "border-sky-500 ring-2 ring-sky-300 ring-offset-1 shadow-[0_0_0_1px_rgba(14,165,233,0.25)]",
         isDeleteSelected && "border-rose-500 ring-2 ring-rose-300 ring-offset-1 shadow-[0_0_0_1px_rgba(244,63,94,0.22)]",
         isPlaceholder && "border-amber-400 bg-amber-50 ring-2 ring-amber-200 ring-offset-1",
@@ -84,6 +90,15 @@ const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
 };
 const SELECTION_ACTIVE_SURFACE = 'bg-[#3a3a3c] border-[#3a3a3c] text-white';
 const DELETE_ACTIVE_SURFACE = 'bg-rose-600 border-rose-600 text-white';
+const SEARCH_MATCH_SURFACE = 'bg-amber-50 border-amber-200 text-amber-700';
+const MARQUEE_DRAG_THRESHOLD = 4;
+
+type DragSelectionState = {
+  startClientX: number;
+  startClientY: number;
+  currentClientX: number;
+  currentClientY: number;
+};
 
 const getBranchChainIds = (branchId: string, branches: Record<string, Branch>): string[] => {
   const chain: string[] = [];
@@ -399,10 +414,18 @@ export default function ContextMap() {
   const [pendingDeletePreview, setPendingDeletePreview] = useState<DeleteSelectionPreview | null>(null);
   const [selectionNotice, setSelectionNotice] = useState<SelectionNotice | null>(null);
   const [isSelectionNoticeExpanded, setIsSelectionNoticeExpanded] = useState(false);
+  const [dragSelection, setDragSelection] = useState<DragSelectionState | null>(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResultIds, setSearchResultIds] = useState<string[]>([]);
+  const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(-1);
+  const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
   
   const [rfInstance, setRfInstance] = useState<any>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rfWrapperRef = useRef<HTMLDivElement>(null);
+  const suppressNextSelectionClickRef = useRef(false);
   const previousLayoutModeRef = useRef<LayoutMode>('tree');
   const previousLayoutRefreshTokenRef = useRef(0);
   const previousStructureSignatureRef = useRef<string>('');
@@ -424,6 +447,8 @@ export default function ContextMap() {
   const selectionIntent = nodeSelectionIntent;
 
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
+  const searchResultIdSet = useMemo(() => new Set(searchResultIds), [searchResultIds]);
+  const activeSearchNodeId = activeSearchResultIndex >= 0 ? searchResultIds[activeSearchResultIndex] ?? null : null;
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -452,6 +477,12 @@ export default function ContextMap() {
   }, [clearSelectionState, emitSelectionNotice, finishNodeSelectionMode]);
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
+    if (suppressNextSelectionClickRef.current) {
+      suppressNextSelectionClickRef.current = false;
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
     if (isDeletePreviewActive) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest('.react-flow__node')) {
@@ -464,12 +495,24 @@ export default function ContextMap() {
   }, [clearSelectionState, isSelectionMode, isDeletePreviewActive]);
 
   const handleSelectionAction = useCallback((event: React.MouseEvent, nodeId: string) => {
+    if (suppressNextSelectionClickRef.current) {
+      suppressNextSelectionClickRef.current = false;
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
     event.stopPropagation();
     event.preventDefault();
-    toggleNodeSelection(nodeId);
+    toggleNodeSelection(nodeId, event.shiftKey);
   }, [toggleNodeSelection]);
 
   const handleNodePrimaryAction = useCallback((event: React.MouseEvent, nodeId: string) => {
+    if (suppressNextSelectionClickRef.current) {
+      suppressNextSelectionClickRef.current = false;
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
     if (isDeletePreviewActive) return;
     setContextMenu(null);
     if (!liveProject) return;
@@ -479,6 +522,115 @@ export default function ContextMap() {
     }
     cycleNodeInclusionState(liveProject.project_id, nodeId);
   }, [isDeletePreviewActive, liveProject, isSelectionMode, handleSelectionAction, cycleNodeInclusionState]);
+
+  const handleMarqueeSelectionEnd = useCallback((selection: DragSelectionState) => {
+    if (!rfInstance) return;
+
+    const start = rfInstance.screenToFlowPosition({
+      x: selection.startClientX,
+      y: selection.startClientY,
+    });
+    const end = rfInstance.screenToFlowPosition({
+      x: selection.currentClientX,
+      y: selection.currentClientY,
+    });
+
+    const renderedNodes = ((rfInstance.getNodes?.() || []) as FlowNode[])
+      .map((node) => {
+        const absolutePosition = ((node as { internals?: { positionAbsolute?: { x: number; y: number } } }).internals?.positionAbsolute ?? null);
+
+        return {
+          id: node.id,
+          x: absolutePosition?.x ?? node.position?.x ?? 0,
+          y: absolutePosition?.y ?? node.position?.y ?? 0,
+          width: node.measured?.width ?? node.width ?? 0,
+          height: node.measured?.height ?? node.height ?? 0,
+        };
+      })
+      .filter((node) => node.width > 0 && node.height > 0);
+
+    const nextSelectedIds = getNodeIdsIntersectingSelectionRect(renderedNodes, {
+      left: Math.min(start.x, end.x),
+      right: Math.max(start.x, end.x),
+      top: Math.min(start.y, end.y),
+      bottom: Math.max(start.y, end.y),
+    });
+
+    if (nextSelectedIds.length === 0) return;
+
+    applyNodeSelectionChanges(
+      nextSelectedIds.map((id) => ({
+        id,
+        selected: !selectedNodeIdSet.has(id),
+      }))
+    );
+  }, [applyNodeSelectionChanges, rfInstance, selectedNodeIdSet]);
+
+  useEffect(() => {
+    if (!dragSelection) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      setDragSelection((current) => (
+        current
+          ? {
+              ...current,
+              currentClientX: event.clientX,
+              currentClientY: event.clientY,
+            }
+          : current
+      ));
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      setDragSelection((current) => {
+        if (!current) return current;
+
+        const nextSelection = {
+          ...current,
+          currentClientX: event.clientX,
+          currentClientY: event.clientY,
+        };
+        const deltaX = Math.abs(nextSelection.currentClientX - nextSelection.startClientX);
+        const deltaY = Math.abs(nextSelection.currentClientY - nextSelection.startClientY);
+
+        if (deltaX >= MARQUEE_DRAG_THRESHOLD || deltaY >= MARQUEE_DRAG_THRESHOLD) {
+          suppressNextSelectionClickRef.current = true;
+          handleMarqueeSelectionEnd(nextSelection);
+        }
+
+        return null;
+      });
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [dragSelection, handleMarqueeSelectionEnd]);
+
+  const handleMapPointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isSelectionMode || isDeletePreviewActive || !event.shiftKey || event.button !== 0) return;
+
+    const target = event.target as HTMLElement | null;
+    const isMapSurface =
+      !!target?.closest('.react-flow__pane') ||
+      !!target?.closest('.react-flow__node');
+    const isInteractiveOverlay =
+      !!target?.closest('[data-context-map-toolbar]') ||
+      !!target?.closest('button, input, textarea, select, a');
+
+    if (!isMapSurface || isInteractiveOverlay) return;
+
+    setDragSelection({
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      currentClientX: event.clientX,
+      currentClientY: event.clientY,
+    });
+  }, [isDeletePreviewActive, isSelectionMode]);
 
   const handleFlowNodesChange = useCallback((changes: NodeChange[]) => {
     const selectChanges = changes.filter((change): change is Extract<NodeChange, { type: 'select' }> => change.type === 'select');
@@ -564,6 +716,32 @@ export default function ContextMap() {
     return Object.values(renderNodes).filter((n) => n.project_id === renderProject.project_id).length;
   }, [renderProject, renderNodes]);
 
+  const clearSearch = useCallback(() => {
+    setSearchInput('');
+    setSearchQuery('');
+    setSearchResultIds([]);
+    setActiveSearchResultIndex(-1);
+    setIsSearchPanelOpen(false);
+  }, []);
+
+  const runSearch = useCallback(() => {
+    if (!renderProject) return;
+    const nextQuery = searchInput.trim();
+    if (!nextQuery) {
+      clearSearch();
+      return;
+    }
+    const matches = getProjectNodeSearchResults(renderNodes, renderProject.project_id, nextQuery);
+    setSearchQuery(nextQuery);
+    setSearchResultIds(matches);
+    setActiveSearchResultIndex(matches.length > 0 ? 0 : -1);
+    setIsSearchPanelOpen(false);
+  }, [clearSearch, renderNodes, renderProject, searchInput]);
+
+  const stepSearchResult = useCallback((direction: 'next' | 'prev') => {
+    setActiveSearchResultIndex((current) => stepNodeSearchIndex(current, searchResultIds.length, direction));
+  }, [searchResultIds.length]);
+
   const getViewportSnapshot = useCallback(() => {
     if (!rfInstance) return null;
     try {
@@ -621,6 +799,8 @@ export default function ContextMap() {
           const nextIsSelected = selectedNodeIdSet.has(fn.id);
           const nextIsDeleteSelected = selectionIntent === 'delete' && nextIsSelected;
           const nextIsPlaceholder = currentNode.metadata.is_delete_placeholder || previewNodeVariants[fn.id] === 'placeholder';
+          const nextIsSearchMatch = searchResultIdSet.has(fn.id);
+          const nextIsSearchCurrent = activeSearchNodeId === fn.id;
           const dataChanged =
             fn.data.content !== currentNode.content ||
             fn.data.isActive !== nextIsActive ||
@@ -629,6 +809,8 @@ export default function ContextMap() {
             fn.data.isSelectedStart !== nextIsSelectedStart ||
             fn.data.isSelected !== nextIsSelected ||
             fn.data.isDeleteSelected !== nextIsDeleteSelected ||
+            fn.data.isSearchMatch !== nextIsSearchMatch ||
+            fn.data.isSearchCurrent !== nextIsSearchCurrent ||
             fn.data.isPlaceholder !== nextIsPlaceholder;
           if (!dataChanged) return fn;
           changed = true;
@@ -644,6 +826,8 @@ export default function ContextMap() {
               isSelectedStart: nextIsSelectedStart,
               isSelected: nextIsSelected,
               isDeleteSelected: nextIsDeleteSelected,
+              isSearchMatch: nextIsSearchMatch,
+              isSearchCurrent: nextIsSearchCurrent,
               isPlaceholder: nextIsPlaceholder,
               selectionIndex: undefined,
             },
@@ -812,6 +996,8 @@ export default function ContextMap() {
           isSelectedStart: nodeId === selectedStartId,
           isSelected: selectedNodeIdSet.has(nodeId),
           isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(nodeId),
+          isSearchMatch: searchResultIdSet.has(nodeId),
+          isSearchCurrent: activeSearchNodeId === nodeId,
           isPlaceholder: node.metadata.is_delete_placeholder || previewNodeVariants[nodeId] === 'placeholder',
           selectionIndex: undefined,
           onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, nodeId),
@@ -850,6 +1036,8 @@ export default function ContextMap() {
           isSelectedStart: branch.anchor_node_id === selectedStartId,
           isSelected: selectedNodeIdSet.has(branch.anchor_node_id),
           isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(branch.anchor_node_id),
+          isSearchMatch: searchResultIdSet.has(branch.anchor_node_id),
+          isSearchCurrent: activeSearchNodeId === branch.anchor_node_id,
           isPlaceholder: anchorNode.metadata.is_delete_placeholder || previewNodeVariants[branch.anchor_node_id] === 'placeholder',
           selectionIndex: undefined,
           onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, branch.anchor_node_id),
@@ -878,6 +1066,8 @@ export default function ContextMap() {
               isSelectedStart: node.node_id === selectedStartId,
               isSelected: selectedNodeIdSet.has(node.node_id),
               isDeleteSelected: selectionIntent === 'delete' && selectedNodeIdSet.has(node.node_id),
+              isSearchMatch: searchResultIdSet.has(node.node_id),
+              isSearchCurrent: activeSearchNodeId === node.node_id,
               isPlaceholder: node.metadata.is_delete_placeholder || previewNodeVariants[node.node_id] === 'placeholder',
               selectionIndex: undefined,
               onPrimaryClick: (e: React.MouseEvent) => handleNodePrimaryAction(e, node.node_id),
@@ -987,6 +1177,8 @@ export default function ContextMap() {
                 ...node.data,
                 isSelected,
                 isDeleteSelected: selectionIntent === 'delete' && isSelected,
+                isSearchMatch: searchResultIdSet.has(node.id),
+                isSearchCurrent: activeSearchNodeId === node.id,
                 isPlaceholder: renderNodes[node.id]?.metadata.is_delete_placeholder || previewNodeVariants[node.id] === 'placeholder',
                 selectionIndex: undefined,
               },
@@ -1049,7 +1241,7 @@ export default function ContextMap() {
       });
     }
 
-  }, [renderNodes, renderBranches, renderMainlines, renderContexts, activeProjectId, selectedStartId, activeNodeIds, renderProject, renderContext, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken, resolvedMainlineNodeIds, rfInstance, selectedNodeIdSet, selectionIntent, previewNodeVariants, isDeletePreviewActive, handleNodePrimaryAction]);
+  }, [renderNodes, renderBranches, renderMainlines, renderContexts, activeProjectId, selectedStartId, activeNodeIds, renderProject, renderContext, setFlowNodes, setFlowEdges, layoutMode, layoutRefreshToken, resolvedMainlineNodeIds, rfInstance, selectedNodeIdSet, selectionIntent, previewNodeVariants, isDeletePreviewActive, handleNodePrimaryAction, searchResultIdSet, activeSearchNodeId]);
 
   // Auto fit view on nodes change
   useEffect(() => {
@@ -1066,6 +1258,69 @@ export default function ContextMap() {
       rfInstance.fitView({ duration: 250, padding: 0.12 });
     });
   }, [rfInstance, renderProject?.project_id, renderContext?.base_path, isDeletePreviewActive]);
+
+  useEffect(() => {
+    if (!renderProject) {
+      clearSearch();
+      return;
+    }
+    setSearchResultIds((current) => {
+      const filtered = current.filter((nodeId) => renderNodes[nodeId]?.project_id === renderProject.project_id);
+      if (filtered.length !== current.length) {
+        setActiveSearchResultIndex(filtered.length === 0 ? -1 : 0);
+      }
+      return filtered;
+    });
+  }, [clearSearch, renderNodes, renderProject]);
+
+  const isBatchBusy = isExtractingPattern;
+  const canUndoStructure = pastStructureSnapshots.length > 0;
+  const canRedoStructure = futureStructureSnapshots.length > 0;
+  const hasNaturalResetTarget = !!project && ((mainlines[project.project_id] || []).join('|') !== ((naturalMainlines[project.project_id] || []).join('|')));
+  const isDeleteSuccessNotice = !!selectionNotice?.id?.startsWith('delete-confirmed-');
+  const pendingDeleteCount = pendingDeletePreview?.deletedNodeIds.length ?? 0;
+  const pendingPlaceholderCount = pendingDeletePreview?.placeholderNodeIds.length ?? 0;
+  const iconOnlyToolstrip = containerWidth > 0 && containerWidth < 480;
+  const compactActionBar = containerWidth > 0 && containerWidth < 760;
+  const iconOnlyActionBar = containerWidth > 0 && containerWidth < 600;
+  const showExpandedSearch = containerWidth === 0 || containerWidth >= 900;
+
+  useEffect(() => {
+    if (showExpandedSearch) {
+      setIsSearchPanelOpen(false);
+    }
+  }, [showExpandedSearch]);
+
+  useEffect(() => {
+    if (!rfInstance || !containerRef.current || !activeSearchNodeId) return;
+    const targetNode = ((rfInstance.getNodes?.() || []) as FlowNode[]).find((node) => node.id === activeSearchNodeId)
+      || flowNodes.find((node) => node.id === activeSearchNodeId);
+    const viewport = rfInstance.getViewport?.();
+    if (!targetNode || !viewport) return;
+
+    const nodeWidth = targetNode.measured?.width ?? targetNode.width ?? 192;
+    const nodeHeight = targetNode.measured?.height ?? targetNode.height ?? 80;
+    const left = targetNode.position.x * viewport.zoom + viewport.x;
+    const top = targetNode.position.y * viewport.zoom + viewport.y;
+    const right = left + nodeWidth * viewport.zoom;
+    const bottom = top + nodeHeight * viewport.zoom;
+    const boundsWidth = containerRef.current.clientWidth;
+    const boundsHeight = containerRef.current.clientHeight;
+    const padding = 48;
+    const inView =
+      left >= padding &&
+      top >= padding &&
+      right <= boundsWidth - padding &&
+      bottom <= boundsHeight - padding;
+
+    if (inView) return;
+
+    rfInstance.setCenter?.(
+      targetNode.position.x + nodeWidth / 2,
+      targetNode.position.y + nodeHeight / 2,
+      { zoom: viewport.zoom, duration: 320 }
+    );
+  }, [activeSearchNodeId, flowNodes, rfInstance]);
 
   useEffect(() => {
     if (!rfInstance || !renderProject) return;
@@ -1099,17 +1354,6 @@ export default function ContextMap() {
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, [rfInstance]);
-
-  const isBatchBusy = isExtractingPattern;
-  const canUndoStructure = pastStructureSnapshots.length > 0;
-  const canRedoStructure = futureStructureSnapshots.length > 0;
-  const hasNaturalResetTarget = !!project && ((mainlines[project.project_id] || []).join('|') !== ((naturalMainlines[project.project_id] || []).join('|')));
-  const isDeleteSuccessNotice = !!selectionNotice?.id?.startsWith('delete-confirmed-');
-  const pendingDeleteCount = pendingDeletePreview?.deletedNodeIds.length ?? 0;
-  const pendingPlaceholderCount = pendingDeletePreview?.placeholderNodeIds.length ?? 0;
-  const iconOnlyToolstrip = containerWidth > 0 && containerWidth < 400;
-  const compactActionBar = containerWidth > 0 && containerWidth < 760;
-  const iconOnlyActionBar = containerWidth > 0 && containerWidth < 600;
 
   useEffect(() => {
     setPendingDeletePreview(null);
@@ -1387,7 +1631,11 @@ export default function ContextMap() {
         </div>
       </div>
       
-      <div className="flex-1 relative">
+      <div
+        ref={rfWrapperRef}
+        className="flex-1 relative"
+        onPointerDownCapture={handleMapPointerDownCapture}
+      >
         <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}
@@ -1402,6 +1650,7 @@ export default function ContextMap() {
           selectionMode={SelectionMode.Partial}
           selectionOnDrag={false}
           panOnScroll={false}
+          minZoom={0.1}
           fitView
           attributionPosition="bottom-right"
         >
@@ -1410,8 +1659,88 @@ export default function ContextMap() {
         </ReactFlow>
 
         {/* Floating View Controls */}
-        <div className="absolute right-4 left-auto top-4 z-20 flex max-w-[calc(100%-5rem)] items-center justify-end gap-2">
+        <div
+          data-context-map-toolbar
+          className="absolute right-4 left-auto top-4 z-20 flex max-w-[calc(100%-5rem)] items-center justify-end gap-2"
+        >
           <div className="flex overflow-hidden rounded-[0.95rem] border border-zinc-200 bg-white/95 shadow-[0_12px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl">
+          {showExpandedSearch ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                runSearch();
+              }}
+              className="flex h-10 items-center border-r border-zinc-200 bg-white px-2.5"
+            >
+              <Search size={13} className="shrink-0 text-zinc-500" />
+              <input
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && event.shiftKey && searchResultIds.length > 0) {
+                    event.preventDefault();
+                    stepSearchResult('prev');
+                  }
+                }}
+                placeholder="Search nodes"
+                className="ml-2 w-32 bg-transparent text-[11px] text-zinc-700 outline-none placeholder:text-zinc-400"
+              />
+              {searchResultIds.length > 0 && (
+                <>
+                  <span className={clsx("ml-2 rounded-md border px-1.5 py-0.5 text-[10px] font-medium", SEARCH_MATCH_SURFACE)}>
+                    {Math.max(activeSearchResultIndex + 1, 1)}/{searchResultIds.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => stepSearchResult('prev')}
+                    className="ml-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100"
+                    title="Previous result"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepSearchResult('next')}
+                    className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100"
+                    title="Next result"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </>
+              )}
+              <button
+                type="submit"
+                className="ml-2 inline-flex h-7 items-center rounded-md border border-zinc-200 px-2 text-[10px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+              >
+                Go
+              </button>
+              {(searchQuery || searchInput) && (
+                <button
+                  type="button"
+                  onClick={clearSearch}
+                  className="ml-1 inline-flex h-7 items-center rounded-md border border-zinc-200 px-2 text-[10px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100"
+                >
+                  Clear
+                </button>
+              )}
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsSearchPanelOpen((current) => !current)}
+              className={clsx(
+                "flex h-10 items-center justify-center gap-1.5 border-r border-zinc-200 px-3 text-[11px] font-medium transition-colors",
+                iconOnlyToolstrip ? "w-10" : "min-w-[5.5rem]",
+                isSearchPanelOpen || searchResultIds.length > 0 || searchInput.trim()
+                  ? "bg-amber-50 text-amber-700"
+                  : "bg-white text-zinc-700 hover:bg-zinc-100"
+              )}
+              title="Search nodes"
+            >
+              <Search size={13} />
+              {!iconOnlyToolstrip && <span>Search</span>}
+            </button>
+          )}
           <button
             onClick={handleToggleSelectionMode}
             className={clsx(
@@ -1456,6 +1785,74 @@ export default function ContextMap() {
             {!iconOnlyToolstrip && <span>{isSelectionMode && selectionIntent === 'delete' ? 'Finish' : 'Delete'}</span>}
           </button>
           </div>
+          {!showExpandedSearch && isSearchPanelOpen && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                runSearch();
+              }}
+              className="absolute right-0 top-12 w-[min(20rem,calc(100vw-2rem))] rounded-[1rem] border border-zinc-200 bg-white/97 p-3 shadow-[0_18px_44px_rgba(15,23,42,0.14)] backdrop-blur-xl"
+            >
+              <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                <Search size={14} className="shrink-0 text-zinc-500" />
+                <input
+                  autoFocus
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && event.shiftKey && searchResultIds.length > 0) {
+                      event.preventDefault();
+                      stepSearchResult('prev');
+                    }
+                  }}
+                  placeholder="Search nodes"
+                  className="w-full bg-transparent text-[12px] text-zinc-700 outline-none placeholder:text-zinc-400"
+                />
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  {searchResultIds.length > 0 && (
+                    <span className={clsx("rounded-md border px-1.5 py-0.5 text-[10px] font-medium", SEARCH_MATCH_SURFACE)}>
+                      {Math.max(activeSearchResultIndex + 1, 1)}/{searchResultIds.length}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => stepSearchResult('prev')}
+                    disabled={searchResultIds.length === 0}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                    title="Previous result"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepSearchResult('next')}
+                    disabled={searchResultIds.length === 0}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-300"
+                    title="Next result"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    className="inline-flex h-8 items-center rounded-md border border-zinc-200 px-3 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                  >
+                    Go
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSearch}
+                    className="inline-flex h-8 items-center rounded-md border border-zinc-200 px-3 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            </form>
+          )}
           {projectNodeCount > 0 && flowNodes.length === 0 && (
             <button
               onClick={() => {
@@ -1469,6 +1866,21 @@ export default function ContextMap() {
             </button>
           )}
         </div>
+
+        {dragSelection && rfWrapperRef.current && (() => {
+          const bounds = rfWrapperRef.current.getBoundingClientRect();
+          const left = Math.min(dragSelection.startClientX, dragSelection.currentClientX) - bounds.left;
+          const top = Math.min(dragSelection.startClientY, dragSelection.currentClientY) - bounds.top;
+          const width = Math.abs(dragSelection.currentClientX - dragSelection.startClientX);
+          const height = Math.abs(dragSelection.currentClientY - dragSelection.startClientY);
+
+          return (
+            <div
+              className="pointer-events-none absolute z-30 rounded-md border border-sky-400 bg-sky-200/15 shadow-[inset_0_0_0_1px_rgba(56,189,248,0.2)]"
+              style={{ left, top, width, height }}
+            />
+          );
+        })()}
 
         {selectionNotice && (
           <div

@@ -216,3 +216,38 @@ Replace the current generic example project with a first-run tutorial conversati
 - Keep the existing seed trigger behavior (`user_id === test` or no persisted state).
 - Do not change the actual store schema; only replace the seeded content and relationships.
 - Use at least one nested branch so `return_parent` can be demonstrated realistically.
+
+## Follow-up: Edit Past Messages
+
+## Follow-up: Search Nodes in Context Map
+
+### Goal
+Add a map-local node search tool that searches the current project's full node set, highlights all matches directly in the `Context Map`, and lets the user step through matches without auto-locating into chat.
+
+### Phases
+- [x] Add a failing-style regression script for node-search matching and next/prev stepping
+- [x] Add pure search helpers for current-project matching and cyclic navigation
+- [x] Add `Context Map` toolbar search UI to the left of `Selection`
+- [x] Highlight all matches, emphasize the active result, and auto-pan the map when the active result is offscreen
+- [x] Verify node-search regression, existing delete-selection regression, lint, and build
+
+### Constraints
+- Search scope is the current project's full node set, not only the visible context path.
+- Search runs on submit, not live on every keystroke.
+- The feature should not auto-locate in chat; it only changes map focus and highlight state.
+- Result stepping should cycle like an editor find flow.
+
+### Goal
+Allow users to edit past `user` and `assistant` messages directly in the conversation stream so future prompt context uses the edited text, while already-generated downstream messages remain unchanged.
+
+### Phases
+- [x] Add a failing-style regression script for node edit and revert semantics
+- [x] Add store actions for editing and restoring node content while preserving original text
+- [x] Add conversation-stream UI affordances for edit/save/cancel/revert
+- [x] Verify message-edit regression, existing chat-history regression, lint, and build
+
+### Constraints
+- Editing a past node must not rewrite structure, node IDs, or previously generated descendant nodes.
+- Future prompt construction should naturally consume the edited text through the existing `node.content` reads.
+- Preserve the original text locally so users can revert.
+- Keep remote append-only chat sync unchanged for now; edits are local persisted state, not remote history mutations.

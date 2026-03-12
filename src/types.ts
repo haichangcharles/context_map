@@ -34,6 +34,7 @@ export interface Node {
     is_return_summary?: boolean;
     is_delete_placeholder?: boolean;
     natural_origin_branch_id?: string | null;
+    edited_at?: string;
   };
 }
 

@@ -16,6 +16,8 @@
     "test:selection-mode": "tsx scripts/test-selection-mode-toggle.ts",
     "test:nested-branch": "tsx scripts/test-nested-branch.ts",
     "test:stream-truncation": "tsx scripts/test-stream-truncation.ts",
+    "test:message-edit": "tsx scripts/test-message-edit.ts",
+    "test:node-search": "tsx scripts/test-node-search.ts",
     "test:pattern-sync": "tsx scripts/test-pattern-sync.ts",
     "test:branch-feedback-sync": "tsx scripts/test-branch-feedback-sync.ts",
     "test:structure-suggestion-feedback-sync": "tsx scripts/test-structure-suggestion-feedback-sync.ts",

@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Project, Node, Branch, ContextView, Pattern, PatternType, Role, DeleteSelectionPreview, SelectionIntent } from './types';
 import { logDeletedChatNodes, mergeRecoveredChatState, syncProjectRename, type RecoveredChatState } from './services/chatHistory';
 import { logPatternDelete, logPatternUpsert, mergeRemotePatternsIntoPatterns, type PatternSyncRecord } from './services/patternSync';
-import { reconcileSelectedNodeIds } from './utils/selectionState';
+import { reconcileSelectedNodeIds, resolveNodeSelectionClick } from './utils/selectionState';
 
 type StructureSnapshot = {
   projects: Record<string, Project>;
@@ -44,6 +44,7 @@ interface AppState {
   
   addNode: (projectId: string, parentId: string | null, role: Role, content: string, branchId: string | null) => string;
   updateNodeContent: (nodeId: string, content: string, mode?: 'replace' | 'append') => void;
+  editNodeContent: (nodeId: string, content: string) => void;
   createBranch: (projectId: string, anchorNodeId: string) => string;
   acceptSuggestedBranch: (projectId: string, anchorNodeId: string, nodeIdsToMove: string[]) => string | null;
   promoteBranch: (projectId: string, branchId: string) => void;
@@ -82,7 +83,7 @@ interface AppState {
   startNodeSelectionMode: (intent: SelectionIntent) => void;
   finishNodeSelectionMode: () => void;
   clearNodeSelection: () => void;
-  toggleNodeSelection: (nodeId: string) => void;
+  toggleNodeSelection: (nodeId: string, additive?: boolean) => void;
   applyNodeSelectionChanges: (changes: Array<{ id: string; selected: boolean }>) => void;
 }
 
@@ -1239,6 +1240,28 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     });
   },
 
+  editNodeContent: (nodeId, content) => {
+    set((state) => {
+      const node = state.nodes[nodeId];
+      if (!node) return state;
+      if (content === node.content) return state;
+
+      return {
+        nodes: {
+          ...state.nodes,
+          [nodeId]: {
+            ...node,
+            content,
+            metadata: {
+              ...node.metadata,
+              edited_at: new Date().toISOString(),
+            },
+          },
+        },
+      };
+    });
+  },
+
   createBranch: (projectId, anchorNodeId) => {
     const branchId = uuidv4();
 
@@ -2117,15 +2140,11 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     set({ selectedNodeIds: [] });
   },
 
-  toggleNodeSelection: (nodeId) => {
+  toggleNodeSelection: (nodeId, additive = true) => {
     set((state) => {
-      const next = new Set(state.selectedNodeIds);
-      if (next.has(nodeId)) {
-        next.delete(nodeId);
-      } else {
-        next.add(nodeId);
-      }
-      return { selectedNodeIds: Array.from(next) };
+      return {
+        selectedNodeIds: resolveNodeSelectionClick(state.selectedNodeIds, nodeId, additive),
+      };
     });
   },
 

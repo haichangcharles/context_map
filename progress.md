@@ -219,6 +219,62 @@
   - `task_plan.md`
   - `findings.md`
 
+## Session: 2026-03-12
+
+### Follow-up Feature: Edit past messages in the conversation stream
+- **Status:** complete
+- **Started:** 2026-03-12 00:10:00 EDT
+- Actions taken:
+  - Added store-level `editNodeContent` and `revertNodeContent` actions that preserve `metadata.original_content` and `metadata.edited_at`.
+  - Added `scripts/test-message-edit.ts` to cover edit, multi-edit, revert, and no-op same-content behavior.
+  - Wired `ConversationStream` with hover actions for `Edit` and `Revert`, plus inline save/cancel editing UI for past `user` and `assistant` messages.
+  - Kept future context behavior implicit by continuing to read `node.content` everywhere prompt assembly already does.
+  - Explicitly left remote append-only chat sync unchanged so edits remain local persisted state.
+- Files created/modified:
+  - `src/store.ts`
+  - `src/types.ts`
+  - `src/components/ConversationStream.tsx`
+  - `scripts/test-message-edit.ts`
+  - `package.json`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results (2026-03-12, message edit)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Message edit regression | `npm run test:message-edit` | Edit/revert semantics stay correct across repeated edits | Passed | ✓ |
+| Chat history regression | `npm run test:chat-history-sync` | Existing append-only remote recovery path remains green | Passed | ✓ |
+| Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
+| Production build | `npm run build` | App builds successfully with message-edit UI | Passed with existing chunk-size warning | ✓ |
+
+### Follow-up Feature: Search nodes in Context Map
+- **Status:** complete
+- **Started:** 2026-03-12 01:05:00 EDT
+- Actions taken:
+  - Added `src/utils/nodeSearch.ts` with pure helpers for query normalization, current-project node matching, and cyclic next/prev stepping.
+  - Added `scripts/test-node-search.ts` and verified the search helper semantics before wiring UI.
+  - Added a submit-based search tool to the `Context Map` toolbar, positioned to the left of `Selection`.
+  - Highlighted all matching nodes on the map and emphasized the currently active match with a stronger visual treatment.
+  - Added automatic map panning when stepping to a result outside the current viewport, while keeping chat `Locate` user-driven.
+  - Re-ran delete-selection regression, lint, and build to confirm the existing map workflows still work.
+- Files created/modified:
+  - `src/utils/nodeSearch.ts`
+  - `scripts/test-node-search.ts`
+  - `src/components/ContextMap.tsx`
+  - `package.json`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results (2026-03-12, map node search)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Node search regression | `npm run test:node-search` | Query normalization, project filtering, and cyclic stepping work | Passed | ✓ |
+| Delete selection regression | `npm run test:delete-selection` | Existing map delete workflow stays green | Passed | ✓ |
+| Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
+| Production build | `npm run build` | App builds successfully with map search UI | Passed with existing chunk-size warning | ✓ |
+
 ### Follow-up Feature: Tutorial example seed data
 - **Status:** complete
 - **Started:** 2026-03-11 17:05:00 EDT

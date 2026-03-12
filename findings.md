@@ -95,3 +95,16 @@
 - The seed path already supports multi-branch examples out of the box, so the lowest-risk tutorial implementation is to replace only the seeded node content and branch wiring inside `src/store.ts`.
 - A nested example branch is worth including in the seed because it gives a concrete, inspectable case for `return_parent`, which is otherwise hard to explain from a flat graph.
 - A small scripted regression test can validate tutorial intent by checking the seeded project title, mainline order, and the presence of branch/return/extract cues without depending on UI rendering.
+
+## New Findings: Message Edit in Stream
+- The current conversation runtime already derives future prompt context from `Node.content`, so the cheapest correct implementation is to edit `content` in place for future turns instead of introducing a second "effective content" layer across the app.
+- To keep the feature reversible, the store should preserve `metadata.original_content` and `metadata.edited_at` only when a node has actually diverged from its original text.
+- Keeping `updateNodeContent` separate from manual editing matters because streaming assistant output appends into `content` and must not accidentally mark every generated answer as "edited".
+- Existing remote chat-history sync is append-only and keyed to the original logged node snapshots, so this feature currently persists through local Zustand storage but does not propagate edited text to remote recovery. That is a deliberate scope boundary, not an implementation bug.
+
+## New Findings: Context Map Node Search
+- `ContextMap.tsx` already owns the full rendered project graph plus the active `ReactFlow` instance, so search can stay entirely local to the map without touching Zustand store shape.
+- The safest first release is submit-only text search over `node.content` scoped to the current project, sorted by timestamp for stable editor-like next/prev traversal.
+- Search highlighting needs two levels: all matches and the currently focused match. Reusing the normal selected-state styling would be too ambiguous because selection mode and search mode can coexist conceptually.
+- Auto-pan should only happen when the active result is offscreen; always re-centering on every next/prev would feel jumpy.
+- The user explicitly did not want auto-`Locate`, so search focus and chat-location remain separate actions.

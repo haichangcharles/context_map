@@ -108,7 +108,7 @@ export default function App() {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging) return;
       const newWidth = document.body.clientWidth - e.clientX;
-      if (newWidth > 200 && newWidth < 800) {
+      if (newWidth > 365 && newWidth < 800) {
         setContextMapWidth(newWidth);
       }
     };
