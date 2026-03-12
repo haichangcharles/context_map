@@ -198,6 +198,19 @@
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
 | Chat history project-delete RED | `npm run test:chat-history-sync` before fix | Fails because project tombstones are lost and stale remote merge restores the project | Failed with missing deleted node tombstones as expected | ✓ |
+
+## Session: 2026-03-12
+
+### Reference Study: claude-code-canvas
+- **Status:** in progress
+- **Started:** 2026-03-12 EST
+- Actions taken:
+  - Reframed the current question as product research for `Map` mode rather than immediate implementation.
+  - Added a dedicated follow-up section in the planning files for the reference study.
+  - Preparing to clone and inspect `raulriera/claude-code-canvas` in a workspace subfolder.
+  - Cloned the reference repo into `refs/claude-code-canvas`.
+  - Read its README, data-loading server, radial layout code, and canvas renderer.
+  - Ran the local server and confirmed `/api/sessions` returns grouped project/branch/session data from the local Claude history files.
 | Chat history project-delete GREEN | `npm run test:chat-history-sync` after fix | Local delete persists and stale remote merge does not restore the project | Passed | ✓ |
 | Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
 | Production build | `npm run build` | App builds successfully after project-delete sync fix | Passed | ✓ |

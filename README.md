@@ -24,7 +24,7 @@ It upgrades linear chat into a visual mainline/branch workflow so complex tasks 
 - Mainline/branch operations: `Re-Branch`, `Promote`, and custom mainline start/end
 - Context orchestration: node include/exclude and batch context operations
 - Structure governance: `Undo / Redo` and `Reset to Natural`
-- Layout modes: `Tree` / `Mindmap` / `Timeline`
+- Layout modes: `Canvas` / `Map` / `Thread`
 - AI enhancements: streaming responses, branch summary, and SOP extraction (`name / guidance / steps`)
 
 ## 3. Typical Use Cases

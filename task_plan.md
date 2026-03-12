@@ -198,6 +198,23 @@ Ensure renaming a project survives refresh and remote recovery even when Supabas
 - [x] Verify tests and document any schema/policy implications
 
 ### Fix Summary
+
+## Follow-up: Reference Study For Map Mode
+
+### Goal
+Study [`raulriera/claude-code-canvas`](https://github.com/raulriera/claude-code-canvas) locally to understand its canvas interaction model and identify which ideas could strengthen Context Map's `Map` mode without overcomplicating the product.
+
+### Phases
+- [ ] Clone the reference repo into a local subfolder and inspect its structure
+- [ ] Run or build the reference project to understand the interaction model
+- [ ] Read the key files that define its node/canvas UX and data model
+- [ ] Compare the reference patterns against Context Map's current `Canvas / Map / Thread` split
+- [ ] Summarize concrete ideas to borrow, adapt, or reject
+
+### Constraints
+- Treat the reference app as inspiration, not a drop-in architecture.
+- Preserve Context Map's mainline/branch mental model.
+- Prefer product insights over a file-by-file code tour.
 - Confirmed the old rename path relied on `PATCH chat_history`, which does not actually persist under the current anon insert/select policy setup.
 - Added append-only rename marker records to `chat_history` carrying the latest `project_title`.
 - Updated reconstruction to use rename markers for title recovery while excluding those markers from visible recovered nodes/mainline.

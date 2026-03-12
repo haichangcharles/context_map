@@ -2161,7 +2161,7 @@ export default function ContextMap() {
                   : "bg-transparent text-zinc-700 hover:bg-white/50"
               )}
             >
-              Tree
+              Canvas
             </button>
           <button
               onClick={() => setLayoutMode('mindmap')}
@@ -2172,7 +2172,7 @@ export default function ContextMap() {
                   : "bg-transparent text-zinc-700 hover:bg-white/50"
               )}
             >
-              Mindmap
+              Map
             </button>
           <button
               onClick={() => setLayoutMode('timeline')}
@@ -2183,7 +2183,7 @@ export default function ContextMap() {
                   : "bg-transparent text-zinc-700 hover:bg-white/50"
               )}
             >
-              Timeline
+              Thread
           </button>
         </div>
         

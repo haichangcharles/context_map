@@ -108,3 +108,13 @@
 - Search highlighting needs two levels: all matches and the currently focused match. Reusing the normal selected-state styling would be too ambiguous because selection mode and search mode can coexist conceptually.
 - Auto-pan should only happen when the active result is offscreen; always re-centering on every next/prev would feel jumpy.
 - The user explicitly did not want auto-`Locate`, so search focus and chat-location remain separate actions.
+
+## New Findings: Map Mode Reference Study
+- The user wants `Map` to feel meaningfully different from `Thread`, but the earlier topic-map design space was trending too complex for the current product stage.
+- A local study of `claude-code-canvas` should focus on interaction model, abstraction level, and how it differentiates canvas exploration from linear thread reading.
+- The main evaluation question is not "can we copy its canvas?" but "which pieces reduce complexity while making `Map` clearer as a product concept?"
+- `claude-code-canvas` is a lightweight Express + HTML5 Canvas app, not a node-editor stack. It reads Claude session files, groups them as `hub -> project -> branch -> session`, and renders a radial hierarchy.
+- Its key product move is abstraction by level, not semantic understanding: the canvas never tries to infer topics. It simply chooses a higher-level unit (`session`) than raw message turns and presents stable groups around that.
+- Layout stability is a first-class concern. The radial layout uses golden-angle placement for projects and fixed alternating offsets for branches/sessions so adding new items does not reshuffle existing ones.
+- Interaction is intentionally global-view-first: pan, zoom, drag-to-rearrange, collapse/expand, and click-to-resume. There is no attempt to make the canvas itself a detailed editor for the underlying session graph.
+- This suggests a lower-complexity direction for Context Map `Map`: differentiate it from `Thread` primarily through aggregation and spatial overview, not through full LLM-driven topic semantics.
