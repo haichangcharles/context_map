@@ -218,6 +218,52 @@
 ## Session: 2026-03-11
 
 ### Follow-up Feature: Remote sync for branch feedback
+
+## Session: 2026-03-13
+
+### Study Prep: Paper framing and RQs
+- **Status:** complete
+- Actions taken:
+  - Consolidated the current paper framing around `Mixed-Initiative Context` as the primary contribution.
+  - Recorded the role of the current interface as a probe / instantiation rather than the paper's main contribution.
+  - Drafted a dedicated study-facing framing document covering the working abstract, positioning, and the current three RQs.
+  - Added summary findings so this framing survives outside the chat transcript.
+- Files created/modified:
+  - `Study/00-paper-framing.md`
+  - `findings.md`
+  - `progress.md`
+
+### Study Docs Pack: proposal, procedure, consent, IRB, and materials
+- **Status:** complete
+- Actions taken:
+  - Created a full `Study/` document pack for the user study, aligned to the `Mixed-Initiative Context` paradigm framing rather than a product-level evaluation framing.
+  - Added a detailed study proposal covering motivation, RQs, design, tasks, data collection, analysis, ethics, and limitations.
+  - Added a moderator-facing procedure with fixed participant schedules, two valid timing templates, moderator scripts, and exception handling.
+  - Added a bilingual informed consent form with explicit disclosure of screen recording, audio recording, probe interaction logging, commercial AI use, compensation, and participant rights.
+  - Added an IRB-style minimal-risk protocol draft with placeholders for institution-specific transfer.
+  - Added a materials/measures document covering task prompts, warm-up, observation checklist, interview guide, coding schema, and RQ mapping.
+- Files created/modified:
+  - `Study/01-study-proposal.md`
+  - `Study/02-study-procedure.md`
+  - `Study/03-consent-form.md`
+  - `Study/04-irb-minimal-risk.md`
+  - `Study/05-materials-and-measures.md`
+  - `findings.md`
+  - `progress.md`
+
+### Study Docs Follow-up: submission-ready consent form
+- **Status:** complete
+- Actions taken:
+  - Rewrote the consent form into a more submission-ready formal English version while keeping the bilingual working file.
+  - Filled in George Mason University, PI, research lead, and GMU IRB contact information.
+  - Replaced the retention placeholder with a direct statement that identifiable data will be securely deleted after completion of the project.
+  - Generated a plain-text submission version and exported a PDF copy for handoff.
+- Files created/modified:
+  - `Study/03-consent-form.md`
+  - `Study/03-consent-form-final.html`
+  - `Study/03-consent-form-final.txt`
+  - `Study/03-consent-form-final.pdf`
+  - `progress.md`
 - **Status:** complete
 - **Started:** 2026-03-11 15:50:17 EDT
 - Actions taken:
@@ -397,3 +443,24 @@
 | Rename persistence GREEN | `npm run test:chat-history-sync` after fix | Recovery uses the latest rename marker title and keeps markers out of visible nodes/mainline | Passed | ✓ |
 | Type check | `npm run lint` | No TypeScript errors | Passed | ✓ |
 | Production build | `npm run build` | App builds successfully after rename persistence fix | Passed, with existing chunk-size warning only | ✓ |
+
+## Session: 2026-03-18
+
+### Follow-up Writing Support: Paper master framing document
+- **Status:** complete
+- **Started:** 2026-03-18 EDT
+- Actions taken:
+  - Re-read the current paper framing, study proposal, moderator procedure, and materials/measures documents.
+  - Consolidated the stable thesis around `Mixed-Initiative Context`, including the main storytelling arc, safe claims, non-claims, and reviewer-facing boundaries.
+  - Wrote a detailed master document at `Study/07-paper-master-framing.md` covering thesis, storytelling, contribution framing, related-work positioning, reviewer defenses, draft structure, and wording guidance.
+  - Logged the resulting paper-framing decisions back into `task_plan.md`, `findings.md`, and `progress.md` so future sessions can resume from the same paper position.
+- Files created/modified:
+  - `Study/07-paper-master-framing.md`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## Test Results (2026-03-18, paper framing)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Framing consistency check | Re-read `Study/00-paper-framing.md`, `Study/01-study-proposal.md`, `Study/02-study-procedure.md`, `Study/05-materials-and-measures.md` against new master doc | New master doc preserves existing thesis and study boundaries while adding draft guidance | Passed by manual review | ✓ |

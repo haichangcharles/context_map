@@ -118,3 +118,39 @@
 - Layout stability is a first-class concern. The radial layout uses golden-angle placement for projects and fixed alternating offsets for branches/sessions so adding new items does not reshuffle existing ones.
 - Interaction is intentionally global-view-first: pan, zoom, drag-to-rearrange, collapse/expand, and click-to-resume. There is no attempt to make the canvas itself a detailed editor for the underlying session graph.
 - This suggests a lower-complexity direction for Context Map `Map`: differentiate it from `Thread` primarily through aggregation and spatial overview, not through full LLM-driven topic semantics.
+
+## New Findings: Mixed-Initiative Context Paper Framing
+- The paper contribution is the `Mixed-Initiative Context` paradigm, not the current `ContextMap` interface as a standalone system contribution.
+- The current interface should be described as a probe or instantiation used to study the paradigm in one task setting.
+- The core conceptual shift is from implicit, ever-accumulating context to explicit, structured, manipulable context.
+- The current working RQs cluster around three themes:
+  - how users use explicit context structures
+  - how users and AI co-manage context under mixed initiative
+  - how users perceive explicit context management in terms of cognition, control, and workflow
+- Study findings should therefore be interpreted as evidence about interaction patterns and user perception, not as a strong product-level superiority claim over conventional chat.
+
+## New Findings: Study Document Pack
+- The study should be documented as a probe-based, minimal-risk, within-subject comparative study of the `Mixed-Initiative Context` paradigm.
+- The current study pack now fixes five artifacts in `Study/`:
+  - proposal
+  - moderator procedure
+  - bilingual consent form
+  - IRB-style minimal-risk protocol draft
+  - materials/measures sheet
+- The chosen protocol uses 6 participants, remote synchronous sessions, screen/audio recording, and probe interaction logs.
+- The final task structure uses two matched hardware-concept tasks (`T1`/`T2`) rather than repeating the same task across tools.
+- The procedure now distinguishes two valid 45-minute timelines depending on whether the participant encounters the probe condition first or second, ensuring the 3-minute warm-up always happens immediately before the probe block.
+
+## New Findings: Paper Master Framing Document
+- A dedicated master framing document is useful because the project now has enough stable paper logic that it should stop living only in chat and spread across multiple study artifacts.
+- The paper's central claim should remain at the paradigm level: `context` becomes an explicit interaction object rather than an implicitly accumulated model input.
+- `linear chat` should appear in the narrative as one common manifestation of the current context paradigm, not as the primary novelty contrast.
+- The strongest contribution stack is:
+  - paradigm articulation
+  - probe-based empirical investigation
+  - design implications for future systems
+- Context-management traces can be discussed as newly exposed and instrumented signals, but only as future opportunities for personalization / alignment, not as an already validated learning pipeline.
+- A future draft should explicitly separate:
+  - what the current study shows
+  - what the current system merely instantiates
+  - what remains future work

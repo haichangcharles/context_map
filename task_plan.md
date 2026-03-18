@@ -268,3 +268,20 @@ Allow users to edit past `user` and `assistant` messages directly in the convers
 - Future prompt construction should naturally consume the edited text through the existing `node.content` reads.
 - Preserve the original text locally so users can revert.
 - Keep remote append-only chat sync unchanged for now; edits are local persisted state, not remote history mutations.
+
+## Follow-up: Paper Master Framing Document
+
+### Goal
+Create a detailed master framing document that can serve as the stable foundation for the later paper draft on `Mixed-Initiative Context`.
+
+### Phases
+- [x] Re-read the current paper framing and study documents
+- [x] Consolidate the stable thesis, main story, RQ rationale, and contribution boundaries
+- [x] Write a detailed paper master framing document in `Study/`
+- [x] Record the key framing decisions in planning files for future sessions
+
+### Constraints
+- Keep the paper centered on the `Mixed-Initiative Context` paradigm rather than a product or UI comparison.
+- Treat `linear chat` as a motivation example and symptom of the broader context paradigm, not the core novelty claim.
+- Position the current system as a probe / instantiation.
+- Treat context-management traces as collected signals and future opportunities, not as already validated learning outputs.
