@@ -92,6 +92,7 @@ const SELECTION_ACTIVE_SURFACE = 'bg-[#3a3a3c] border-[#3a3a3c] text-white';
 const DELETE_ACTIVE_SURFACE = 'bg-rose-600 border-rose-600 text-white';
 const SEARCH_MATCH_SURFACE = 'bg-amber-50 border-amber-200 text-amber-700';
 const MARQUEE_DRAG_THRESHOLD = 4;
+const TIMELINE_BRANCH_TAG_CENTER_COMPENSATION = 10;
 
 type DragSelectionState = {
   startClientX: number;
@@ -315,12 +316,13 @@ const getStructuredPositions = (
         siblingLaneByAnchorSide.set(laneKey, lane + 1);
 
         const x = anchorPos.x + (side === 'left' ? -1 : 1) * (360 + lane * 220);
-        const y0 = anchorPos.y + lane * 28;
+        const y0 = anchorPos.y;
 
         group.branchNodes.forEach((node, index) => {
+          const shouldCompensateBranchTag = index === 0 && mainlineSet.has(group.branch.anchor_node_id);
           positions.set(node.node_id, {
             x,
-            y: y0 + index * branchStepY,
+            y: y0 + index * branchStepY - (shouldCompensateBranchTag ? TIMELINE_BRANCH_TAG_CENTER_COMPENSATION : 0),
           });
         });
         progressed = true;
@@ -404,7 +406,7 @@ export default function ContextMap() {
   
   const [flowNodes, setFlowNodes] = useNodesState([]);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState([]);
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>('tree');
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('timeline');
   const [layoutRefreshToken, setLayoutRefreshToken] = useState(0);
   
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
@@ -426,7 +428,7 @@ export default function ContextMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const rfWrapperRef = useRef<HTMLDivElement>(null);
   const suppressNextSelectionClickRef = useRef(false);
-  const previousLayoutModeRef = useRef<LayoutMode>('tree');
+  const previousLayoutModeRef = useRef<LayoutMode>('timeline');
   const previousLayoutRefreshTokenRef = useRef(0);
   const previousStructureSignatureRef = useRef<string>('');
   const liveProject = activeProjectId ? projects[activeProjectId] : null;
@@ -2153,28 +2155,6 @@ export default function ContextMap() {
         {/* Bottom Layout Mode Bar */}
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/55 backdrop-blur-xl border border-white/70 rounded-full shadow-[0_10px_30px_rgba(0,0,0,0.16)] p-1.5 flex items-center gap-1 z-20">
           <button
-              onClick={() => setLayoutMode('tree')}
-              className={clsx(
-                "text-xs px-3 py-1.5 rounded-full transition-colors",
-                layoutMode === 'tree'
-                  ? "bg-zinc-200/85 text-zinc-900 shadow-sm"
-                  : "bg-transparent text-zinc-700 hover:bg-white/50"
-              )}
-            >
-              Canvas
-            </button>
-          <button
-              onClick={() => setLayoutMode('mindmap')}
-              className={clsx(
-                "text-xs px-3 py-1.5 rounded-full transition-colors",
-                layoutMode === 'mindmap'
-                  ? "bg-zinc-200/85 text-zinc-900 shadow-sm"
-                  : "bg-transparent text-zinc-700 hover:bg-white/50"
-              )}
-            >
-              Map
-            </button>
-          <button
               onClick={() => setLayoutMode('timeline')}
               className={clsx(
                 "text-xs px-3 py-1.5 rounded-full transition-colors",
@@ -2184,6 +2164,17 @@ export default function ContextMap() {
               )}
             >
               Thread
+            </button>
+          <button
+              onClick={() => setLayoutMode('tree')}
+              className={clsx(
+                "text-xs px-3 py-1.5 rounded-full transition-colors",
+                layoutMode === 'tree'
+                  ? "bg-zinc-200/85 text-zinc-900 shadow-sm"
+                  : "bg-transparent text-zinc-700 hover:bg-white/50"
+              )}
+            >
+              Canvas
           </button>
         </div>
         
