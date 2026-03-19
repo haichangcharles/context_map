@@ -5,6 +5,12 @@ import { buildStructureSuggestionSystemPrompt } from '../utils/promptBuilders';
 import { StructureSuggestionDecision, parseStructureSuggestionDecision } from '../utils/structureSuggestion';
 import { appendDeltaWithinLimit } from './streamLimit';
 import { getModelProviderPreference, getOpenAIModelOverride } from './modelProvider';
+import {
+  formatUserModelForStructureAgent,
+  getUserModelFeatureEnabled,
+  readUserModel,
+} from './userModel';
+import { getActiveUserId } from '../utils/branchFeedbackDataset';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -554,7 +560,19 @@ export const detectStructureSuggestion = async (
     ],
   } as const;
 
-  const systemPrompt = buildStructureSuggestionSystemPrompt(contextLines);
+  const activeUserId = getActiveUserId();
+  const userModelBlock =
+    getUserModelFeatureEnabled() && activeUserId
+      ? (() => {
+          const userModel = readUserModel(activeUserId);
+          return userModel ? formatUserModelForStructureAgent(userModel) : '';
+        })()
+      : '';
+
+  const systemPrompt = buildStructureSuggestionSystemPrompt({
+    contextLines,
+    userModelBlock,
+  });
 
   try {
     const result = await callOpenAICompat(

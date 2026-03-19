@@ -19,6 +19,8 @@
     "test:message-edit": "tsx scripts/test-message-edit.ts",
     "test:node-search": "tsx scripts/test-node-search.ts",
     "test:layout-selector": "tsx scripts/test-layout-selector.ts",
+    "test:user-model": "tsx scripts/test-user-model.ts",
+    "test:user-model-sync": "tsx scripts/test-user-model-sync.ts",
     "test:thread-lane-offset": "tsx scripts/test-thread-lane-offset.ts",
     "test:pattern-sync": "tsx scripts/test-pattern-sync.ts",
     "test:branch-feedback-sync": "tsx scripts/test-branch-feedback-sync.ts",

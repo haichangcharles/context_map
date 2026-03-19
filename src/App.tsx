@@ -19,6 +19,7 @@ import {
 } from './utils/branchFeedbackDataset';
 import { pullRemoteChatHistory, reconstructChatStateFromRecords, startChatHistorySync } from './services/chatHistory';
 import { pullRemotePatterns, startPatternSync } from './services/patternSync';
+import { mergeUserModelsFromRemoteRecords, pullRemoteUserModels, startUserModelSync } from './services/userModel';
 import {
   mergeStructureSuggestionFeedbackFromRemote,
   pullRemoteStructureSuggestionFeedback,
@@ -60,6 +61,12 @@ export default function App() {
     mergeStructureSuggestionFeedbackFromRemote(records);
   };
 
+  const syncUserModelsFromRemote = async () => {
+    const records = await pullRemoteUserModels();
+    if (records.length === 0) return;
+    mergeUserModelsFromRemoteRecords(records);
+  };
+
   const syncChatHistoryFromRemote = async () => {
     const records = await pullRemoteChatHistory();
     if (records.length === 0) return;
@@ -79,11 +86,13 @@ export default function App() {
     const stopPatternSync = startPatternSync();
     const stopBranchFeedbackSync = startBranchFeedbackSync();
     const stopStructureSuggestionFeedbackSync = startStructureSuggestionFeedbackSync();
+    const stopUserModelSync = startUserModelSync();
     return () => {
       stopSync();
       stopPatternSync();
       stopBranchFeedbackSync();
       stopStructureSuggestionFeedbackSync();
+      stopUserModelSync();
     };
   }, []);
 
@@ -138,6 +147,7 @@ export default function App() {
     await syncPatternsFromRemote();
     await syncBranchFeedbackFromRemote();
     await syncStructureSuggestionFeedbackFromRemote();
+    await syncUserModelsFromRemote();
     setActiveUserIdState(normalized);
   };
 
@@ -148,12 +158,14 @@ export default function App() {
     void syncPatternsFromRemote();
     void syncBranchFeedbackFromRemote();
     void syncStructureSuggestionFeedbackFromRemote();
+    void syncUserModelsFromRemote();
 
     const onOnline = () => {
       void syncChatHistoryFromRemote();
       void syncPatternsFromRemote();
       void syncBranchFeedbackFromRemote();
       void syncStructureSuggestionFeedbackFromRemote();
+      void syncUserModelsFromRemote();
     };
 
     const onVisible = () => {
@@ -162,6 +174,7 @@ export default function App() {
         void syncPatternsFromRemote();
         void syncBranchFeedbackFromRemote();
         void syncStructureSuggestionFeedbackFromRemote();
+        void syncUserModelsFromRemote();
       }
     };
 
@@ -175,6 +188,7 @@ export default function App() {
       void syncPatternsFromRemote();
       void syncBranchFeedbackFromRemote();
       void syncStructureSuggestionFeedbackFromRemote();
+      void syncUserModelsFromRemote();
     }, 15000);
 
     return () => {

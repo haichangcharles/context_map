@@ -9,6 +9,7 @@ import {
   readAllPersonaProfiles,
   readBranchFeedbackDatasetByUser,
   readPersonaProfile,
+  type BranchFeedbackDataset,
   savePersonaProfile,
   setActiveUserId,
   setBranchDebugEnabled,
@@ -23,13 +24,25 @@ import {
   setOpenAIModelOverride,
   type ModelProviderPreference,
 } from '../services/modelProvider';
+import {
+  buildUserModelFromBranchFeedback,
+  formatUserModelForBranchAgent,
+  getUserModelFeatureEnabled,
+  readAllUserModels,
+  readUserModel,
+  saveUserModel,
+  setUserModelFeatureEnabled,
+} from '../services/userModel';
 
 export default function ManagePanel() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [profileJson, setProfileJson] = useState('');
+  const [userModelJson, setUserModelJson] = useState('');
+  const [userModelPrompt, setUserModelPrompt] = useState('');
   const [status, setStatus] = useState('');
   const [debugEnabled, setDebugEnabled] = useState(getBranchDebugEnabled());
+  const [userModelFeatureEnabled, setUserModelFeatureEnabledState] = useState(getUserModelFeatureEnabled());
   const [providerPreference, setProviderPreferenceState] = useState<ModelProviderPreference>(getModelProviderPreference());
   const [openAIModelInput, setOpenAIModelInput] = useState(getOpenAIModelOverride());
 
@@ -41,7 +54,8 @@ export default function ManagePanel() {
   const users = useMemo(() => {
     const byUser = readAllBranchFeedbackByUser();
     const profiles = readAllPersonaProfiles();
-    const set = new Set<string>([...Object.keys(byUser), ...Object.keys(profiles)]);
+    const userModels = readAllUserModels();
+    const set = new Set<string>([...Object.keys(byUser), ...Object.keys(profiles), ...Object.keys(userModels)]);
     const arr = Array.from(set).sort();
     return arr;
   }, [refreshTick]);
@@ -53,6 +67,7 @@ export default function ManagePanel() {
   const handleRefresh = () => {
     setRefreshTick((n) => n + 1);
     setDebugEnabled(getBranchDebugEnabled());
+    setUserModelFeatureEnabledState(getUserModelFeatureEnabled());
     setStatus('Refreshed.');
   };
 
@@ -74,6 +89,12 @@ export default function ManagePanel() {
     setBranchDebugEnabled(enabled);
     setDebugEnabled(enabled);
     setStatus(`Console debug ${enabled ? 'enabled' : 'disabled'}.`);
+  };
+
+  const handleToggleUserModelFeature = (enabled: boolean) => {
+    setUserModelFeatureEnabled(enabled);
+    setUserModelFeatureEnabledState(enabled);
+    setStatus(`User model feature ${enabled ? 'enabled' : 'disabled'}.`);
   };
 
   const handleProviderPreferenceChange = (value: ModelProviderPreference) => {
@@ -103,6 +124,17 @@ export default function ManagePanel() {
     setRefreshTick((n) => n + 1);
   };
 
+  const handleGenerateAndSaveUserModel = () => {
+    if (!effectiveUserId) return;
+    const currentDataset: BranchFeedbackDataset = readBranchFeedbackDatasetByUser(effectiveUserId);
+    const userModel = buildUserModelFromBranchFeedback(effectiveUserId, currentDataset);
+    saveUserModel(userModel);
+    setUserModelJson(JSON.stringify(userModel, null, 2));
+    setUserModelPrompt(formatUserModelForBranchAgent(userModel));
+    setStatus(`User model updated for ${effectiveUserId}`);
+    setRefreshTick((n) => n + 1);
+  };
+
   const handleLoadSavedProfile = () => {
     if (!effectiveUserId) return;
     const profile = readPersonaProfile(effectiveUserId);
@@ -113,6 +145,20 @@ export default function ManagePanel() {
     }
     setProfileJson(JSON.stringify(profile, null, 2));
     setStatus(`Loaded saved persona profile for ${effectiveUserId}`);
+  };
+
+  const handleLoadSavedUserModel = () => {
+    if (!effectiveUserId) return;
+    const userModel = readUserModel(effectiveUserId);
+    if (!userModel) {
+      setUserModelJson('');
+      setUserModelPrompt('');
+      setStatus('No saved user model for this user.');
+      return;
+    }
+    setUserModelJson(JSON.stringify(userModel, null, 2));
+    setUserModelPrompt(formatUserModelForBranchAgent(userModel));
+    setStatus(`Loaded saved user model for ${effectiveUserId}`);
   };
 
   return (
@@ -150,11 +196,25 @@ export default function ManagePanel() {
             Generate + Save Profile
           </button>
           <button
+            onClick={handleGenerateAndSaveUserModel}
+            disabled={!effectiveUserId}
+            className="px-4 py-2 rounded-lg bg-emerald-600 text-white disabled:bg-zinc-300"
+          >
+            Generate + Save User Model
+          </button>
+          <button
             onClick={handleLoadSavedProfile}
             disabled={!effectiveUserId}
             className="px-4 py-2 rounded-lg border border-zinc-300 bg-white disabled:bg-zinc-100"
           >
             Load Saved Profile
+          </button>
+          <button
+            onClick={handleLoadSavedUserModel}
+            disabled={!effectiveUserId}
+            className="px-4 py-2 rounded-lg border border-zinc-300 bg-white disabled:bg-zinc-100"
+          >
+            Load Saved User Model
           </button>
           <button
             onClick={handleRefresh}
@@ -169,6 +229,14 @@ export default function ManagePanel() {
               onChange={(e) => handleToggleDebug(e.target.checked)}
             />
             Console Debug
+          </label>
+          <label className="flex items-center gap-2 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              checked={userModelFeatureEnabled}
+              onChange={(e) => handleToggleUserModelFeature(e.target.checked)}
+            />
+            User Model Feature
           </label>
           <div className="min-w-[220px]">
             <label className="block text-xs text-zinc-500 mb-1">Model Provider</label>
@@ -301,6 +369,26 @@ export default function ManagePanel() {
             onChange={(e) => setProfileJson(e.target.value)}
             className="w-full min-h-[360px] rounded-lg border border-zinc-300 p-3 font-mono text-xs"
             placeholder="Load or generate profile JSON..."
+          />
+        </div>
+
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold mb-3">User Model JSON</h2>
+          <textarea
+            value={userModelJson}
+            onChange={(e) => setUserModelJson(e.target.value)}
+            className="w-full min-h-[360px] rounded-lg border border-zinc-300 p-3 font-mono text-xs"
+            placeholder="Load or generate user model JSON..."
+          />
+        </div>
+
+        <div className="bg-white border border-zinc-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold mb-3">Branch Agent Advisory Prompt</h2>
+          <textarea
+            value={userModelPrompt}
+            onChange={(e) => setUserModelPrompt(e.target.value)}
+            className="w-full min-h-[280px] rounded-lg border border-zinc-300 p-3 font-mono text-xs"
+            placeholder="Load or generate a user model to preview the advisory prompt..."
           />
         </div>
       </div>

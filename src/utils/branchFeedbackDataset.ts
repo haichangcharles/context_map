@@ -1,4 +1,5 @@
 import { Node } from '../types';
+import { refreshUserModelInStorage } from '../services/userModel';
 
 export type BehaviourSource = 'manually_branch' | 'ignore_branch' | 'reject_branch' | 'accept_branch';
 export type UserBehaviour = 'branch' | 'same_thread';
@@ -230,8 +231,10 @@ export const createBranchFeedbackSyncRuntime = ({
 
   const writeDatasetByUser = (userId: string, dataset: BranchFeedbackDataset) => {
     const parsed = readAllByUser();
-    parsed[userId] = normalizeDataset(dataset);
+    const normalized = normalizeDataset(dataset);
+    parsed[userId] = normalized;
     writeJson(storage, STORAGE_KEY, parsed);
+    refreshUserModelInStorage(storage, userId, normalized);
   };
 
   const readPendingQueue = (): BranchFeedbackSyncRecord[] =>
