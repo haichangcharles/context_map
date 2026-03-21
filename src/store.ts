@@ -42,7 +42,14 @@ interface AppState {
   renameProject: (projectId: string, newTitle: string) => void;
   deleteProject: (projectId: string) => void;
   
-  addNode: (projectId: string, parentId: string | null, role: Role, content: string, branchId: string | null) => string;
+  addNode: (
+    projectId: string,
+    parentId: string | null,
+    role: Role,
+    content: string,
+    branchId: string | null,
+    timestampOverride?: string
+  ) => string;
   updateNodeContent: (nodeId: string, content: string, mode?: 'replace' | 'append') => void;
   editNodeContent: (nodeId: string, content: string) => void;
   createBranch: (projectId: string, anchorNodeId: string) => string;
@@ -1165,7 +1172,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     void logDeletedChatNodes(deletedNodes, { projectTitle });
   },
 
-  addNode: (projectId, parentId, role, content, branchId) => {
+  addNode: (projectId, parentId, role, content, branchId, timestampOverride) => {
     const nodeId = uuidv4();
 
     set((state) => {
@@ -1188,7 +1195,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
         role,
         content,
         branch_id: branchId,
-        timestamp: new Date().toISOString(),
+        timestamp: timestampOverride ?? new Date().toISOString(),
         metadata: {
           natural_origin_branch_id: branchId ?? null,
         },

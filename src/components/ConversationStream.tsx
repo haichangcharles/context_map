@@ -12,6 +12,7 @@ import {
   type StructureSuggestionKind,
 } from '../services/structureSuggestionFeedback';
 import { buildInlineSuggestions, clampInlineSuggestionIndex } from '../utils/inlineSuggestions';
+import { createChildTimestampAfter } from '../utils/messageTimestamp';
 import { buildConversationSystemPrompt } from '../utils/promptBuilders';
 
 type SuggestionFeedbackContext = {
@@ -882,7 +883,9 @@ export default function ConversationStream() {
         : Promise.resolve(null);
 
     const userNodeId = addNode(project.project_id, parentId, 'user', userMsg, branchId);
-    const assistantNodeId = addNode(project.project_id, userNodeId, 'assistant', '', branchId);
+    const userTimestamp = useAppStore.getState().nodes[userNodeId]?.timestamp ?? new Date().toISOString();
+    const assistantTimestamp = createChildTimestampAfter(userTimestamp, new Date().toISOString());
+    const assistantNodeId = addNode(project.project_id, userNodeId, 'assistant', '', branchId, assistantTimestamp);
     const persistedUserNode = useAppStore.getState().nodes[userNodeId];
     if (persistedUserNode) {
       void logChatNode(persistedUserNode, { projectTitle: project.title });
