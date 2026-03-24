@@ -81,6 +81,18 @@ const parseBody = (rawBody: unknown) => {
   return null;
 };
 
+const normalizeOpenAICompatBody = (body: Record<string, unknown>) => {
+  const normalized = { ...body };
+  if (
+    typeof normalized.max_completion_tokens !== 'number' &&
+    typeof normalized.max_tokens === 'number'
+  ) {
+    normalized.max_completion_tokens = normalized.max_tokens;
+  }
+  delete normalized.max_tokens;
+  return normalized;
+};
+
 const buildGeminiPayload = (body: Record<string, unknown>, config: GeminiConfig) => {
   const rawMessages = Array.isArray(body.messages) ? body.messages : [];
   const messages = rawMessages.filter(
@@ -211,7 +223,7 @@ export default async function handler(req: any, res: any) {
     } else {
       const upstreamPayload = {
         model: config.model,
-        ...body,
+        ...normalizeOpenAICompatBody(body),
       };
 
       upstream = await fetch(`${config.baseUrl}/chat/completions`, {

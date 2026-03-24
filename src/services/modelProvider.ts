@@ -4,10 +4,10 @@ const PROVIDER_KEY = 'context-map.model-provider.preference';
 const OPENAI_MODEL_KEY = 'context-map.model-provider.openai-model';
 
 export const getModelProviderPreference = (): ModelProviderPreference => {
-  if (typeof window === 'undefined') return 'auto';
+  if (typeof window === 'undefined') return 'openai';
   const raw = (window.localStorage.getItem(PROVIDER_KEY) || '').trim();
   if (raw === 'siliconflow' || raw === 'openai' || raw === 'auto') return raw;
-  return 'auto';
+  return 'openai';
 };
 
 export const setModelProviderPreference = (value: ModelProviderPreference) => {

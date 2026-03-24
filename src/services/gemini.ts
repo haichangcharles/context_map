@@ -47,7 +47,7 @@ const callOpenAICompat = async (
     },
     body: JSON.stringify({
       messages: payloadMessages,
-      max_tokens: 4096,
+      max_completion_tokens: 4096,
       ...(responseFormat ? { response_format: responseFormat } : {}),
     }),
   });
@@ -85,7 +85,7 @@ const callOpenAICompatStream = async (
     },
     body: JSON.stringify({
       messages: payloadMessages,
-      max_tokens: 4096,
+      max_completion_tokens: 4096,
       stream: true,
     }),
   });

@@ -64,14 +64,14 @@ Configure `.env.local` (see [.env.example](.env.example)):
 
 ```bash
 # Required (server-side only, do NOT use VITE_ prefix)
-SILICONFLOW_API_KEY=...
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-5.3-chat-latest
+
+# Optional SiliconFlow fallback
+SILICONFLOW_API_KEY=
 SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
 DEEPSEEK_MODEL=deepseek-ai/DeepSeek-V3.2
-
-# Backup provider
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=https://api.siliconflow.cn/v1
-OPENAI_MODEL=deepseek-ai/DeepSeek-V3.2
 
 # Optional Gemini provider (currently used by the structure suggestion agent)
 GEMINI_API_KEY=...
@@ -79,7 +79,7 @@ GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_MODEL=gemini-3-flash-preview
 
 # Optional default provider (auto/siliconflow/openai/gemini)
-DEFAULT_MODEL_PROVIDER=auto
+DEFAULT_MODEL_PROVIDER=openai
 
 # Optional search provider
 TAVILY_API_KEY=...
