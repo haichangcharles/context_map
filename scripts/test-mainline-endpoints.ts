@@ -163,6 +163,36 @@ const run = () => {
     'case9: returning from the nested branch should land on the reanchored parent branch'
   );
 
+  // Case 10: If the new mainline consumes only the prefix of an existing branch,
+  // the remaining tail should stay on that branch but re-anchor at the new terminal node.
+  const projectId3 = useAppStore.getState().createProject('Branch Prefix Split');
+  const u1 = useAppStore.getState().addNode(projectId3, null, 'user', 'u1', null);
+  const s1 = useAppStore.getState().addNode(projectId3, u1, 'assistant', 's1', null);
+  const u2 = useAppStore.getState().addNode(projectId3, s1, 'user', 'u2', null);
+  const s2 = useAppStore.getState().addNode(projectId3, u2, 'assistant', 's2', null);
+  const branchD = useAppStore.getState().createBranch(projectId3, u2);
+  const u3 = useAppStore.getState().addNode(projectId3, u2, 'user', 'u3', branchD);
+  const s3 = useAppStore.getState().addNode(projectId3, u3, 'assistant', 's3', branchD);
+  const u4 = useAppStore.getState().addNode(projectId3, s3, 'user', 'u4', branchD);
+  const s4 = useAppStore.getState().addNode(projectId3, u4, 'assistant', 's4', branchD);
+  const u5 = useAppStore.getState().addNode(projectId3, s4, 'user', 'u5', branchD);
+  const s5 = useAppStore.getState().addNode(projectId3, u5, 'assistant', 's5', branchD);
+  useAppStore.getState().returnToMainline(projectId3);
+
+  useAppStore.getState().setMainlineEndpoints(projectId3, u2, u5);
+  const stateAfterCase10 = useAppStore.getState();
+  assert.deepEqual(
+    stateAfterCase10.mainlines[projectId3],
+    [u2, u3, s3, u4, s4, u5],
+    'case10: selected branch prefix should become the new mainline'
+  );
+  assert.equal(stateAfterCase10.nodes[s5].branch_id, branchD, 'case10: remaining tail should stay on the original branch');
+  assert.equal(
+    stateAfterCase10.branches[branchD].anchor_node_id,
+    u5,
+    'case10: original branch should re-anchor at the new terminal node'
+  );
+
   console.log('All mainline endpoint stress cases passed.');
 };
 

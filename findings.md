@@ -1,10 +1,9 @@
 # Findings & Decisions
 
 ## Requirements
-- When a node inside the existing mainline is chosen as the new mainline boundary, any nodes that used to come after it on the old mainline should no longer stay on the mainline.
-- Those trailing nodes should remain connected as a branch rooted at the new terminal mainline node.
-- The new terminal mainline node therefore also acts as an anchor/branch attachment point.
-- The behavior should work whether the chosen boundary node is a `Q` or an `A`.
+- Investigate a new bug where choosing a mainline start and a branch endpoint with nested sub-branches appears to make the system “explode” from about 18 nodes to about 32.
+- Determine whether the inflation is in stored nodes, visible-node projection, or Context Map layout/render state.
+- Avoid blind fixes until the exact failing structure is understood.
 
 ## Research Findings
 - The task is specifically about resetting the mainline to an interior node, not appending a new branch from the current tail.
@@ -18,18 +17,24 @@
 - Undo/redo already restores this reanchored parent relation because structure history snapshots store the full `branches` table, not only the `mainline`.
 - The new bug report is different from the previous reanchor bug: it suggests node-count inflation after choosing a mainline start and a branch endpoint that still has nested sub-branches beneath it.
 - Both [src/components/ConversationStream.tsx](/Users/charles/Downloads/context_map/src/components/ConversationStream.tsx) and [src/components/ContextMap.tsx](/Users/charles/Downloads/context_map/src/components/ContextMap.tsx) maintain their own `resolveVisibleNodesForBasePath` implementation, so a projection-layer duplication bug is plausible even if `state.nodes` itself stays at 18.
+- In two synthetic nested-branch graphs and the built-in tutorial graph, `state.nodes` count remained constant after `setMainlineEndpoints`, visible-node projections did not produce duplicate `node_id`s, and computed Context Map node count did not exceed project node count.
+- In those same synthetic runs, a different structural inconsistency appeared: when the mainline absorbs only the prefix of a branch, the surviving remainder of that branch keeps its old `anchor_node_id` instead of rebasing to the new split point.
+- That stale anchor causes branch views to lose the newly promoted prefix context. Example: after selecting `n2 -> a3`, the remaining branch rooted conceptually at `a3` still reports `anchor_node_id = n3`, so its visible path becomes `[n2, n3, a4, a5]` instead of including the promoted prefix through `a3`.
+- The user-provided UI reproduction (`User 2` as mainline start, `User 5` as mainline end) matches this exact failure mode: `Assistant 5` stayed attached to the original branch anchor near `User 2` instead of becoming a branch off `User 5`.
+- A focused regression test confirmed the bug and passed after re-deriving each branch's `anchor_node_id` from the first remaining node in that branch after `setMainlineEndpoints` rewrites node membership.
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Treat this as a model-level invariant and verify it through existing graph/model tests | The behavior affects structure semantics, not only UI state. |
-| Recompute branch parentage from each branch's anchor node after endpoint resets | Branch nesting should always reflect the anchor node's current containing branch. |
-| Lock the undo/redo guarantee with a regression test instead of relying only on snapshot inspection | The code strongly suggests it works, but the test should prove the exact before/after relationship. |
+| Do not patch the reported explosion blindly yet | Current diagnostic sweeps do not reproduce real node-count inflation. |
+| Treat stale `anchor_node_id` after partial branch promotion as the leading root-cause candidate | It is a concrete inconsistency observed in the model after `setMainlineEndpoints`. |
+| Fix branch remainder anchoring before chasing projection-layer duplication theories | The user-provided reproduction maps cleanly to this structural bug and the regression is now reproducible. |
 
 ## Issues Encountered
 | Issue | Resolution |
 |-------|------------|
 | `tsx` test commands could not open their IPC pipe inside the sandbox | Re-ran targeted tests with escalated permissions. |
+| The reported “18 -> 32 nodes” symptom was not reproducible in synthetic or tutorial graphs | Narrowed the likely root cause to a graph-shape-specific projection bug or stale branch-anchor metadata. |
 
 ## Resources
 - `task_plan.md`

@@ -45,7 +45,7 @@
   - `progress.md` (updated)
 
 ### Phase 5: Delivery
-- **Status:** in_progress
+- **Status:** complete
 - Actions taken:
   - Prepared final summary and verification evidence.
   - Added undo/redo assertions for the reanchored suffix branch and its nested child branch.
@@ -56,6 +56,23 @@
   - `progress.md` (updated)
   - `scripts/test-mainline-endpoints.ts` (updated)
 
+### Phase 6: Branch Explosion Investigation
+- **Status:** complete
+- Actions taken:
+  - Loaded systematic debugging again for the new bug report instead of reusing assumptions from the previous fix.
+  - Compared store-layer node counts against duplicated visibility/layout projections using ad hoc diagnostics executed through `node --import tsx/esm`.
+  - Reproduced several nested-branch endpoint scenarios and found that total `state.nodes` count stayed stable.
+  - Identified a concrete inconsistency: branch remainders keep stale `anchor_node_id` values after the mainline absorbs only a prefix of that branch.
+  - Converted the user-provided `User 2 -> User 5` scenario into a regression test.
+  - Updated `setMainlineEndpoints` to recompute each branch's `anchor_node_id` from the first remaining node in that branch before recomputing parent branch links.
+  - Verified `npm run test:mainline`, `npm run test:nested-branch`, and `npm run lint`.
+- Files created/modified:
+  - `task_plan.md` (updated)
+  - `findings.md` (updated)
+  - `progress.md` (updated)
+  - `scripts/test-mainline-endpoints.ts` (updated)
+  - `src/store.ts` (updated)
+
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
@@ -64,6 +81,12 @@
 | Type check | `npm run lint` | TypeScript exits cleanly | Exit 0 | ✓ |
 | Nested branch regression | `npm run test:nested-branch` | Existing nested branch flow still passes | `Nested branch flow passed.` | ✓ |
 | Undo/redo reanchor regression | `npm run test:mainline` after adding undo/redo assertions | Reanchored parent relation should undo to old graph and redo to new graph | `All mainline endpoint stress cases passed.` | ✓ |
+| Synthetic nested graph diagnostics | `node --import tsx/esm - <<'EOF' ...` | Detect duplicate visible nodes or layout nodes > total | No anomalies; node count stayed stable | ✓ |
+| Tutorial graph diagnostics | `node --import tsx/esm - <<'EOF' ...` | Detect duplicate visible nodes or layout nodes > total | No anomalies; node count stayed stable | ✓ |
+| Branch prefix split regression (red) | `npm run test:mainline` before fix | Old branch remainder should re-anchor at new terminal node | Failed at `case10: original branch should re-anchor at the new terminal node` | ✓ |
+| Branch prefix split regression (green) | `npm run test:mainline` after fix | Mainline suite should pass with new re-anchor behavior | `All mainline endpoint stress cases passed.` | ✓ |
+| Nested branch regression after anchor fix | `npm run test:nested-branch` | Existing nested branch flow still passes | `Nested branch flow passed.` | ✓ |
+| Type check after anchor fix | `npm run lint` | TypeScript exits cleanly | Exit 0 | ✓ |
 
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |
@@ -74,11 +97,11 @@
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 5 delivery after completed fix and verification. |
-| Where am I going? | Final handoff with change summary and evidence. |
-| What's the goal? | Preserve truncated mainline suffix as a branch anchored at the new terminal node. |
-| What have I learned? | The missing behavior was branch reparenting, not suffix auto-branch creation itself. |
-| What have I done? | Added the regression, fixed `setMainlineEndpoints`, and verified `test:mainline`, `test:nested-branch`, and `lint`. |
+| Where am I? | Post-fix verification for the branch-prefix split bug. |
+| Where am I going? | Final handoff with the concrete root cause and regression coverage. |
+| What's the goal? | Ensure branch remainders re-anchor at the new mainline terminal when only a branch prefix is promoted. |
+| What have I learned? | The user-visible miswiring came from stale `anchor_node_id`, not proven node duplication. |
+| What have I done? | Added the precise regression, fixed branch anchor recalculation, and re-verified mainline, nested branch, and lint checks. |
 
 ---
 *Update after completing each phase or encountering errors*

@@ -1,10 +1,10 @@
-# Task Plan: Mainline Reanchor Regression
+# Task Plan: Mainline Branch Explosion Investigation
 
 ## Goal
-Ensure that when the mainline start/end is reset to an interior node, any trailing nodes that used to remain on the old mainline are reattached as a branch from the new terminal node, and that terminal node is treated as an anchor.
+Determine whether selecting a mainline start and a branch endpoint with nested sub-branches causes real node duplication or a projection/layout bug, and identify whether a safe fix is localized enough to attempt.
 
 ## Current Phase
-Phase 5
+Phase 2
 
 ## Phases
 
@@ -18,36 +18,35 @@ Phase 5
 - [x] Define technical approach
 - [x] Identify affected model and tests
 - [x] Document decisions with rationale
-- **Status:** complete
+- **Status:** in_progress
 
 ### Phase 3: Implementation
-- [x] Add failing regression test
-- [x] Implement minimal fix
-- [x] Keep changes scoped to mainline/branch anchor behavior
-- **Status:** complete
+- [ ] Add a failing reproduction for the explosion scenario if reproducible
+- [ ] Implement minimal fix only after root cause is confirmed
+- [ ] Keep changes scoped to branch endpoint restructuring
+- **Status:** pending
 
 ### Phase 4: Testing & Verification
-- [x] Run targeted tests
-- [x] Document test results in progress.md
-- [x] Fix any issues found
-- **Status:** complete
+- [ ] Run targeted diagnostics / regression tests
+- [ ] Document test results in progress.md
+- [ ] Fix any issues found
+- **Status:** pending
 
 ### Phase 5: Delivery
-- [x] Review touched files
-- [x] Summarize behavior change and remaining risks
+- [ ] Review touched files
+- [ ] Summarize behavior change and remaining risks
 - [ ] Deliver to user
-- **Status:** in_progress
+- **Status:** pending
 
 ## Key Questions
 1. Which function mutates mainline membership when the user resets the mainline start/end?
-2. How are anchors and branch roots represented today when a mainline is truncated in the middle?
-3. Which existing tests already cover adjacent behavior so the new test matches the established model semantics?
+2. Does the reported “18 nodes become 32” come from `state.nodes`, visible-node projection, or Context Map layout nodes?
+3. When a branch is only partially absorbed into the mainline, should its `anchor_node_id` move to the new split point?
 
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
-| Start with a regression test around reanchoring trailing mainline nodes | This is a behavior bug; the test should define the exact expected graph shape before implementation. |
-| Recompute `parent_branch_id` after `setMainlineEndpoints` reassigns node `branch_id`s | Existing child branches anchored on the truncated suffix must become nested under the new auto branch rooted at the new mainline terminal node. |
+| First prove whether the explosion is real node creation or projection-layer inflation | The risk and fix surface are very different. |
 
 ## Errors Encountered
 | Error | Attempt | Resolution |
