@@ -38,11 +38,12 @@ These are not the main writing surface for the paper, but they are useful source
 
 These look useful for compliance, submission history, or administrative traceability, but not as active paper-writing inputs.
 
-- `Study/03-consent-form.md`
-- `Study/03-consent-form-final.txt`
-- `Study/04-irb-minimal-risk.md`
-- `Study/06-recruitment-materials.txt`
-- `Study/17-ramp-revision-checklist.md`
+- Moved to `Study/archive/` because they are not part of the active paper-writing loop:
+- `Study/archive/03-consent-form.md`
+- `Study/archive/03-consent-form-final.txt`
+- `Study/archive/04-irb-minimal-risk.md`
+- `Study/archive/06-recruitment-materials.txt`
+- `Study/archive/17-ramp-revision-checklist.md`
 
 ## Archive Candidates
 

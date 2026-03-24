@@ -14,6 +14,11 @@ import {
 import { buildInlineSuggestions, clampInlineSuggestionIndex } from '../utils/inlineSuggestions';
 import { createChildTimestampAfter } from '../utils/messageTimestamp';
 import { buildConversationSystemPrompt } from '../utils/promptBuilders';
+import {
+  DEFAULT_SCROLL_FOLLOW_THRESHOLD_PX,
+  isNearBottom,
+  shouldAutoScrollToLatest,
+} from '../utils/scrollFollow';
 
 type SuggestionFeedbackContext = {
   projectId: string;
@@ -253,11 +258,15 @@ export default function ConversationStream() {
   const [pendingStructureSuggestion, setPendingStructureSuggestion] = useState<PendingStructureSuggestion | null>(null);
   const [branchSuggestionNotice, setBranchSuggestionNotice] = useState<string | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const editingTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const editingActionsRef = useRef<HTMLDivElement | null>(null);
   const wasAutoTruncatedRef = useRef(false);
   const wasManuallyTruncatedRef = useRef(false);
+  const shouldAutoFollowRef = useRef(true);
+  const forceScrollToLatestRef = useRef(false);
+  const previousBasePathRef = useRef<string | null>(null);
   
   // Selection state
   const [viewingPatternId, setViewingPatternId] = useState<string | null>(null);
@@ -330,7 +339,32 @@ export default function ConversationStream() {
   const context = project ? contexts[project.active_context_id] : null;
 
   useEffect(() => {
+    const contextChanged = previousBasePathRef.current !== context?.base_path;
+    previousBasePathRef.current = context?.base_path ?? null;
+    const container = messagesContainerRef.current;
+    const isUserNearLatest = container
+      ? isNearBottom(
+          {
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
+            clientHeight: container.clientHeight,
+          },
+          DEFAULT_SCROLL_FOLLOW_THRESHOLD_PX
+        )
+      : true;
+    shouldAutoFollowRef.current = isUserNearLatest;
+
+    const shouldFollow = shouldAutoScrollToLatest({
+      isUserNearBottom: shouldAutoFollowRef.current,
+      contextChanged,
+      forceFollow: forceScrollToLatestRef.current,
+    });
+
+    if (!shouldFollow) return;
+
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
+    shouldAutoFollowRef.current = true;
+    forceScrollToLatestRef.current = false;
   }, [nodes, context?.base_path]);
 
   useEffect(() => {
@@ -763,6 +797,8 @@ export default function ConversationStream() {
     const userMsg = input.trim();
     setInput('');
     setIsLoading(true);
+    shouldAutoFollowRef.current = true;
+    forceScrollToLatestRef.current = true;
     wasAutoTruncatedRef.current = false;
     wasManuallyTruncatedRef.current = false;
     const streamAbortController = new AbortController();
@@ -1754,7 +1790,20 @@ export default function ConversationStream() {
       )}
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div
+        ref={messagesContainerRef}
+        onScroll={(event) => {
+          shouldAutoFollowRef.current = isNearBottom(
+            {
+              scrollTop: event.currentTarget.scrollTop,
+              scrollHeight: event.currentTarget.scrollHeight,
+              clientHeight: event.currentTarget.clientHeight,
+            },
+            DEFAULT_SCROLL_FOLLOW_THRESHOLD_PX
+          );
+        }}
+        className="flex-1 overflow-y-auto p-6 space-y-6"
+      >
         {branchSuggestionNotice && (
           <div className="max-w-3xl mx-auto mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             {branchSuggestionNotice}
