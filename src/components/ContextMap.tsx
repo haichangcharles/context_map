@@ -11,6 +11,8 @@ import { extractPatternByType } from '../services/gemini';
 import { CONTEXT_MAP_SELECTION_BODY_CLASS, syncBodyClassToggle } from '../utils/contextMapInteraction';
 import { getProjectNodeSearchResults, stepNodeSearchIndex } from '../utils/nodeSearch';
 import { getNodeIdsIntersectingSelectionRect } from '../utils/selectionState';
+import ContextMapModeStrip from './shared/ContextMapModeStrip';
+import ContextMapSelectionActionBar from './shared/ContextMapSelectionActionBar';
 
 // Custom Node Component
 const CustomNode = ({ data }: { data: any }) => {
@@ -1665,128 +1667,77 @@ export default function ContextMap() {
           data-context-map-toolbar
           className="absolute right-4 left-auto top-4 z-20 flex max-w-[calc(100%-5rem)] items-center justify-end gap-2"
         >
-          <div className="flex overflow-hidden rounded-[0.95rem] border border-zinc-200 bg-white/95 shadow-[0_12px_28px_rgba(15,23,42,0.1)] backdrop-blur-xl">
-          {showExpandedSearch ? (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                runSearch();
-              }}
-              className="flex h-10 items-center border-r border-zinc-200 bg-white px-2.5"
-            >
-              <Search size={13} className="shrink-0 text-zinc-500" />
-              <input
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && event.shiftKey && searchResultIds.length > 0) {
-                    event.preventDefault();
-                    stepSearchResult('prev');
-                  }
+          <ContextMapModeStrip
+            searchContent={showExpandedSearch ? (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  runSearch();
                 }}
-                placeholder="Search nodes"
-                className="ml-2 w-32 bg-transparent text-[11px] text-zinc-700 outline-none placeholder:text-zinc-400"
-              />
-              {searchResultIds.length > 0 && (
-                <>
-                  <span className={clsx("ml-2 rounded-md border px-1.5 py-0.5 text-[10px] font-medium", SEARCH_MATCH_SURFACE)}>
-                    {Math.max(activeSearchResultIndex + 1, 1)}/{searchResultIds.length}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => stepSearchResult('prev')}
-                    className="ml-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100"
-                    title="Previous result"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => stepSearchResult('next')}
-                    className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100"
-                    title="Next result"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
-                </>
-              )}
-              <button
-                type="submit"
-                className="ml-2 inline-flex h-7 items-center rounded-md border border-zinc-200 px-2 text-[10px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+                className="flex h-10 items-center border-r border-zinc-200 bg-white px-2.5"
               >
-                Go
-              </button>
-              {(searchQuery || searchInput) && (
+                <Search size={13} className="shrink-0 text-zinc-500" />
+                <input
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && event.shiftKey && searchResultIds.length > 0) {
+                      event.preventDefault();
+                      stepSearchResult('prev');
+                    }
+                  }}
+                  placeholder="Search nodes"
+                  className="ml-2 w-32 bg-transparent text-[11px] text-zinc-700 outline-none placeholder:text-zinc-400"
+                />
+                {searchResultIds.length > 0 && (
+                  <>
+                    <span className={clsx("ml-2 rounded-md border px-1.5 py-0.5 text-[10px] font-medium", SEARCH_MATCH_SURFACE)}>
+                      {Math.max(activeSearchResultIndex + 1, 1)}/{searchResultIds.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => stepSearchResult('prev')}
+                      className="ml-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100"
+                      title="Previous result"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepSearchResult('next')}
+                      className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-200 text-zinc-600 transition-colors hover:bg-zinc-100"
+                      title="Next result"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </>
+                )}
                 <button
-                  type="button"
-                  onClick={clearSearch}
-                  className="ml-1 inline-flex h-7 items-center rounded-md border border-zinc-200 px-2 text-[10px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100"
+                  type="submit"
+                  className="ml-2 inline-flex h-7 items-center rounded-md border border-zinc-200 px-2 text-[10px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
                 >
-                  Clear
+                  Go
                 </button>
-              )}
-            </form>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setIsSearchPanelOpen((current) => !current)}
-              className={clsx(
-                "flex h-10 items-center justify-center gap-1.5 border-r border-zinc-200 px-3 text-[11px] font-medium transition-colors",
-                iconOnlyToolstrip ? "w-10" : "min-w-[5.5rem]",
-                isSearchPanelOpen || searchResultIds.length > 0 || searchInput.trim()
-                  ? "bg-amber-50 text-amber-700"
-                  : "bg-white text-zinc-700 hover:bg-zinc-100"
-              )}
-              title="Search nodes"
-            >
-              <Search size={13} />
-              {!iconOnlyToolstrip && <span>Search</span>}
-            </button>
-          )}
-          <button
-            onClick={handleToggleSelectionMode}
-            className={clsx(
-              "flex h-10 items-center justify-center gap-1.5 border-r border-zinc-200 px-3 text-[11px] font-medium transition-colors",
-              iconOnlyToolstrip ? "w-10" : "min-w-[7rem]",
-              isSelectionMode && selectionIntent === 'batch'
-                ? `${SELECTION_ACTIVE_SURFACE}`
-                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-            )}
-            title={isSelectionMode ? 'Finish node selection mode' : 'Start selecting nodes for batch actions'}
-          >
-            {isSelectionMode && selectionIntent === 'batch' ? <X size={13} className="!text-white" /> : <MousePointerSquareDashed size={13} className="text-inherit" />}
-            {!iconOnlyToolstrip && (
-              <span className={clsx(isSelectionMode && selectionIntent === 'batch' && "!text-white")}>
-                {isSelectionMode && selectionIntent === 'batch' ? 'Finish' : 'Selection'}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={handleRearrangeAndCenter}
-            className={clsx(
-              "flex h-10 items-center justify-center gap-1.5 border-r border-zinc-200 px-3 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100",
-              iconOnlyToolstrip ? "w-10" : "min-w-[7.5rem]"
-            )}
-            title="Rearrange and center mainline"
-          >
-            <Rows3 size={13} />
-            {!iconOnlyToolstrip && <span>Rearrange</span>}
-          </button>
-          <button
-            onClick={handleToggleDeleteMode}
-            className={clsx(
-              "flex h-10 items-center justify-center gap-1.5 px-3 text-[11px] font-medium transition-colors",
-              iconOnlyToolstrip ? "w-10" : "min-w-[6.5rem]",
-              isSelectionMode && selectionIntent === 'delete'
-                ? `${DELETE_ACTIVE_SURFACE}`
-                : "text-rose-700 border-rose-200 bg-rose-50 hover:bg-rose-100"
-            )}
-            title={isSelectionMode && selectionIntent === 'delete' ? 'Finish delete selection mode' : 'Start delete selection mode'}
-          >
-            {isSelectionMode && selectionIntent === 'delete' ? <X size={13} className="!text-white" /> : <Trash2 size={13} />}
-            {!iconOnlyToolstrip && <span>{isSelectionMode && selectionIntent === 'delete' ? 'Finish' : 'Delete'}</span>}
-          </button>
-          </div>
+                {(searchQuery || searchInput) && (
+                  <button
+                    type="button"
+                    onClick={clearSearch}
+                    className="ml-1 inline-flex h-7 items-center rounded-md border border-zinc-200 px-2 text-[10px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100"
+                  >
+                    Clear
+                  </button>
+                )}
+              </form>
+            ) : undefined}
+            iconOnlyToolstrip={iconOnlyToolstrip}
+            isSelectionMode={isSelectionMode}
+            selectionIntent={selectionIntent}
+            isSearchActive={isSearchPanelOpen || searchResultIds.length > 0 || searchInput.trim().length > 0}
+            onToggleSearch={() => setIsSearchPanelOpen((current) => !current)}
+            onToggleSelectionMode={handleToggleSelectionMode}
+            onRearrange={handleRearrangeAndCenter}
+            onToggleDeleteMode={handleToggleDeleteMode}
+          />
           {!showExpandedSearch && isSearchPanelOpen && (
             <form
               onSubmit={(event) => {
@@ -1984,171 +1935,45 @@ export default function ContextMap() {
         {/* Floating Batch Action Bar */}
         {isSelectionMode && selectionIntent === 'batch' && selectedNodeIds.length > 0 && (
           <div
-            className="absolute left-auto right-4 top-20 z-20 max-w-[calc(100%-2rem)] rounded-[0.95rem] border border-zinc-200 bg-white/96 p-1.5 text-slate-900 shadow-[0_10px_22px_rgba(15,23,42,0.08)] backdrop-blur-xl"
+            className="absolute left-auto right-4 top-20 z-20 max-w-[calc(100%-2rem)]"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className={clsx("mr-1 flex h-9 items-center gap-1.5 rounded-md px-2.5", SELECTION_ACTIVE_SURFACE)}>
-                <span className="text-xs font-semibold leading-none">
-                  {selectedNodeIds.length}
-                </span>
-                {!iconOnlyActionBar && <span className="text-[11px] font-medium leading-none">selected</span>}
-              </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleApplySelection('include');
-                }}
-                disabled={isBatchBusy || selectedNodeIds.length === 0}
-                className={clsx(
-                  "inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
-                  isBatchBusy || selectedNodeIds.length === 0
-                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
-                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                )}
-              >
-                <Plus size={14} />
-                {!iconOnlyActionBar && 'Include'}
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleApplySelection('exclude');
-                }}
-                disabled={isBatchBusy || selectedNodeIds.length === 0}
-                className={clsx(
-                  "inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
-                  isBatchBusy || selectedNodeIds.length === 0
-                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
-                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                )}
-              >
-                <Minus size={14} />
-                {!iconOnlyActionBar && 'Exclude'}
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleInvertSelection();
-                }}
-                disabled={isBatchBusy || selectedNodeIds.length === 0}
-                className={clsx(
-                  "inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
-                  isBatchBusy || selectedNodeIds.length === 0
-                    ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
-                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                )}
-              >
-                <ArrowRightLeft size={14} />
-                {!iconOnlyActionBar && 'Invert'}
-              </button>
-              {!compactActionBar && <div className="mx-1 h-6 w-px bg-slate-200" />}
-              <select
-                value={pendingPatternType}
-                onChange={(e) => setPendingPatternType(e.target.value as PatternType)}
-                disabled={isBatchBusy}
-                aria-label="Pattern type"
-                className={clsx(
-                  "h-9 border border-slate-300 bg-white text-[11px] text-slate-700 outline-none",
-                  compactActionBar ? "w-[7rem] rounded-md px-2.5" : "rounded-md px-3"
-                )}
-              >
-                {PATTERN_TYPE_ORDER.map((type) => (
-                  <option key={type} value={type}>
-                    {PATTERN_TYPE_LABEL[type]}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleExtractPatternFromSelection();
-                }}
-                disabled={isBatchBusy || selectedNodeIds.length === 0}
-                className={clsx(
-                  "inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
-                  isBatchBusy || selectedNodeIds.length === 0
-                    ? "border-slate-200 bg-slate-200 text-slate-500 cursor-not-allowed"
-                    : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                )}
-              >
-                <Sparkles size={14} className="text-inherit" />
-                {!iconOnlyActionBar && <span>{isBatchBusy ? 'Extracting...' : 'Extract'}</span>}
-              </button>
-            </div>
+            <ContextMapSelectionActionBar
+              mode="batch"
+              selectedCount={selectedNodeIds.length}
+              iconOnlyActionBar={iconOnlyActionBar}
+              compactActionBar={compactActionBar}
+              pendingPatternType={pendingPatternType}
+              isBusy={isBatchBusy}
+              onInclude={() => handleApplySelection('include')}
+              onExclude={() => handleApplySelection('exclude')}
+              onInvert={handleInvertSelection}
+              onPatternTypeChange={setPendingPatternType}
+              onExtract={() => void handleExtractPatternFromSelection()}
+            />
           </div>
         )}
 
         {isSelectionMode && selectionIntent === 'delete' && selectedNodeIds.length > 0 && (
           <div
-            className="absolute left-auto right-4 top-20 z-20 max-w-[calc(100%-2rem)] rounded-[0.95rem] border border-rose-200 bg-white/96 p-1.5 text-slate-900 shadow-[0_10px_22px_rgba(225,29,72,0.08)] backdrop-blur-xl"
+            className="absolute left-auto right-4 top-20 z-20 max-w-[calc(100%-2rem)]"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {!pendingDeletePreview ? (
-                <>
-                  <div className={clsx("mr-1 flex h-9 items-center gap-1.5 rounded-md px-2.5", DELETE_ACTIVE_SURFACE)}>
-                    <span className="text-xs font-semibold leading-none">
-                      {selectedNodeIds.length}
-                    </span>
-                    {!iconOnlyActionBar && <span className="text-[11px] font-medium leading-none">selected</span>}
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteAction();
-                    }}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-100"
-                  >
-                    <Trash2 size={14} />
-                    {!iconOnlyActionBar && 'Delete...'}
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      clearSelectionState();
-                    }}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
-                  >
-                    {!iconOnlyActionBar ? 'Clear' : <X size={14} />}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <div className="mr-1 min-w-0 px-1">
-                    <p className="text-[12px] font-semibold text-slate-900">
-                      Delete {pendingDeleteCount} node{pendingDeleteCount === 1 ? '' : 's'}?
-                    </p>
-                    {pendingPlaceholderCount > 0 && !compactActionBar && (
-                      <p className="text-[11px] text-amber-700">
-                        Insert {pendingPlaceholderCount} placeholder{pendingPlaceholderCount === 1 ? '' : 's'} to preserve branches
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setPendingDeletePreview(null);
-                    }}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
-                  >
-                    {!iconOnlyActionBar ? 'Cancel' : <X size={14} />}
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleConfirmDelete();
-                    }}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-rose-600 bg-rose-600 px-3 text-[11px] font-medium text-white transition-colors hover:bg-rose-700"
-                  >
-                    <Trash2 size={14} />
-                    {!iconOnlyActionBar && 'Confirm delete'}
-                  </button>
-                </>
-              )}
-            </div>
+            <ContextMapSelectionActionBar
+              mode="delete"
+              selectedCount={selectedNodeIds.length}
+              iconOnlyActionBar={iconOnlyActionBar}
+              compactActionBar={compactActionBar}
+              pendingDeletePreview={!!pendingDeletePreview}
+              pendingDeleteCount={pendingDeleteCount}
+              pendingPlaceholderCount={pendingPlaceholderCount}
+              onDeletePreview={handleDeleteAction}
+              onClear={clearSelectionState}
+              onCancelPreview={() => setPendingDeletePreview(null)}
+              onConfirmDelete={handleConfirmDelete}
+            />
           </div>
         )}
 

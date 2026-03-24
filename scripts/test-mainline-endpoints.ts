@@ -108,6 +108,37 @@ const run = () => {
   assert.equal(useAppStore.getState().nodes[a1].branch_id, branchA, 'case8: branch node should return to natural branch');
   assert.equal(useAppStore.getState().nodes[a2].branch_id, branchA, 'case8: branch node should return to natural branch');
 
+  // Case 9: Truncating the mainline in the middle should turn the trailing suffix into a parent branch.
+  const projectId2 = useAppStore.getState().createProject('Mainline Reanchor');
+  const contextId2 = useAppStore.getState().projects[projectId2].active_context_id;
+  const r1 = useAppStore.getState().addNode(projectId2, null, 'user', 'r1', null);
+  const r2 = useAppStore.getState().addNode(projectId2, r1, 'assistant', 'r2', null);
+  const r3 = useAppStore.getState().addNode(projectId2, r2, 'user', 'r3', null);
+  const r4 = useAppStore.getState().addNode(projectId2, r3, 'assistant', 'r4', null);
+  const r5 = useAppStore.getState().addNode(projectId2, r4, 'user', 'r5', null);
+  const branchC = useAppStore.getState().createBranch(projectId2, r4);
+  const c1 = useAppStore.getState().addNode(projectId2, r4, 'assistant', 'c1', branchC);
+  const c2 = useAppStore.getState().addNode(projectId2, c1, 'user', 'c2', branchC);
+  useAppStore.getState().returnToMainline(projectId2);
+
+  useAppStore.getState().setMainlineEndpoints(projectId2, r1, r3);
+  const stateAfterCase9 = useAppStore.getState();
+  assert.deepEqual(stateAfterCase9.mainlines[projectId2], [r1, r2, r3], 'case9: mainline should stop at the new terminal node');
+  const suffixBranchId = stateAfterCase9.nodes[r4].branch_id;
+  assert.ok(!!suffixBranchId, 'case9: first trailing node should become a branch node');
+  assert.equal(stateAfterCase9.nodes[r5].branch_id, suffixBranchId, 'case9: trailing suffix should stay in one branch');
+  assert.equal(stateAfterCase9.branches[suffixBranchId as string]?.anchor_node_id, r3, 'case9: trailing suffix branch should anchor at the new mainline terminal');
+  assert.equal(stateAfterCase9.branches[branchC].parent_branch_id, suffixBranchId, 'case9: existing child branch should become nested under the trailing suffix branch');
+  assert.equal(stateAfterCase9.branches[branchC].anchor_node_id, r4, 'case9: nested branch should keep its original anchor node');
+
+  useAppStore.getState().jumpToNode(projectId2, c2);
+  useAppStore.getState().returnToParentBranch(projectId2);
+  assert.equal(
+    useAppStore.getState().contexts[contextId2].base_path,
+    suffixBranchId,
+    'case9: returning from the nested branch should land on the reanchored parent branch'
+  );
+
   console.log('All mainline endpoint stress cases passed.');
 };
 

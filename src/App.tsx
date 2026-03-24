@@ -7,6 +7,7 @@ import ProjectList from './components/ProjectList';
 import ConversationStream from './components/ConversationStream';
 import ContextMap from './components/ContextMap';
 import ManagePanel from './components/ManagePanel';
+import TutorialView from './components/TutorialView';
 import { useState, useEffect, useRef } from 'react';
 import { PanelRightClose, PanelRightOpen, Maximize2, Minimize2, BookOpen, ChevronDown } from 'lucide-react';
 import clsx from 'clsx';
@@ -29,6 +30,7 @@ import { mergePatternsFromRemoteRecords, mergeRecoveredChatStateIntoStore, rehyd
 
 export default function App() {
   const isManageRoute = typeof window !== 'undefined' && window.location.pathname === '/manage';
+  const isTutorialRoute = typeof window !== 'undefined' && window.location.pathname === '/tutorial';
   const MANAGE_PASSWORD = '666888';
   const MANAGE_AUTH_KEY = 'context-map.manage-auth.v1';
   const [isContextMapOpen, setIsContextMapOpen] = useState(true);
@@ -224,6 +226,10 @@ export default function App() {
     setIsTutorialMenuOpen(false);
   };
 
+  if (isTutorialRoute) {
+    return <TutorialView />;
+  }
+
   if (!activeUserId) {
     return (
       <div className="h-screen w-full bg-zinc-100 text-zinc-900 flex items-center justify-center">
@@ -258,32 +264,42 @@ export default function App() {
     <div className="flex h-screen w-full bg-zinc-50 text-zinc-900 overflow-hidden font-sans flex-col">
       {!isManageRoute && activeUserId && (
         <div className="h-10 border-b border-zinc-200 bg-white px-4 flex items-center justify-between gap-4 text-xs text-zinc-600">
-          <div className="relative" ref={tutorialMenuRef}>
-            <button
-              onClick={() => setIsTutorialMenuOpen((prev) => !prev)}
+          <div className="flex items-center gap-2">
+            <a
+              href="/tutorial"
               className="inline-flex items-center gap-1.5 rounded border border-zinc-300 px-2 py-1 text-zinc-700 hover:bg-zinc-100"
-              title="Import tutorial project"
+              title="Open tutorial view"
             >
               <BookOpen size={13} />
-              <span>Import Tutorial</span>
-              <ChevronDown size={12} />
-            </button>
-            {isTutorialMenuOpen && (
-              <div className="absolute left-0 top-full z-50 mt-1 min-w-[10rem] overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10">
-                <button
-                  onClick={() => handleImportTutorial('zh')}
-                  className="flex w-full items-center px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100"
-                >
-                  中文教材
-                </button>
-                <button
-                  onClick={() => handleImportTutorial('en')}
-                  className="flex w-full items-center px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100"
-                >
-                  English Tutorial
-                </button>
-              </div>
-            )}
+              <span>Tutorial View</span>
+            </a>
+            <div className="relative" ref={tutorialMenuRef}>
+              <button
+                onClick={() => setIsTutorialMenuOpen((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 rounded border border-zinc-300 px-2 py-1 text-zinc-700 hover:bg-zinc-100"
+                title="Import tutorial project"
+              >
+                <BookOpen size={13} />
+                <span>Import Tutorial</span>
+                <ChevronDown size={12} />
+              </button>
+              {isTutorialMenuOpen && (
+                <div className="absolute left-0 top-full z-50 mt-1 min-w-[10rem] overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10">
+                  <button
+                    onClick={() => handleImportTutorial('zh')}
+                    className="flex w-full items-center px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100"
+                  >
+                    中文教材
+                  </button>
+                  <button
+                    onClick={() => handleImportTutorial('en')}
+                    className="flex w-full items-center px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100"
+                  >
+                    English Tutorial
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <span>Current User: <strong className="text-zinc-800">{activeUserId}</strong></span>

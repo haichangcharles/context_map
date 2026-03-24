@@ -19,6 +19,8 @@ import {
   isNearBottom,
   shouldAutoScrollToLatest,
 } from '../utils/scrollFollow';
+import ConversationNodeHoverActions from './shared/ConversationNodeHoverActions';
+import BranchStatusBar from './shared/BranchStatusBar';
 
 type SuggestionFeedbackContext = {
   projectId: string;
@@ -1753,40 +1755,13 @@ export default function ConversationStream() {
 
       {/* Top Status Bar for Branch Mode */}
       {!isMainline && currentBranch && (
-        <div className="bg-indigo-50 border-b border-indigo-100 p-3 flex items-center justify-between shadow-sm z-10">
-          <div className="flex items-center gap-2 text-indigo-800 font-medium text-sm">
-            <GitBranch size={16} />
-            <span>Subtask Active</span>
-            <span className="text-indigo-500 text-xs ml-2 truncate max-w-[200px]">
-              Branched from {nodes[currentBranch.anchor_node_id]?.content.substring(0, 20)}...
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => returnToMainline(project.project_id)}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-md transition-colors"
-            >
-              <CornerUpLeft size={14} />
-              Return to Mainline
-            </button>
-            {currentBranch.parent_branch_id && (
-              <button
-                onClick={() => returnToParentBranch(project.project_id)}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-white border border-indigo-200 hover:bg-indigo-50 rounded-md transition-colors"
-              >
-                <CornerUpLeft size={14} />
-                Return to Parent
-              </button>
-            )}
-            <button
-              onClick={() => promoteBranch(project.project_id, currentBranch.branch_id)}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
-            >
-              <ArrowUpCircle size={14} />
-              Promote Branch
-            </button>
-          </div>
-        </div>
+        <BranchStatusBar
+          anchorPreview={`${nodes[currentBranch.anchor_node_id]?.content.substring(0, 20)}...`}
+          canReturnParent={!!currentBranch.parent_branch_id}
+          onReturnMainline={() => returnToMainline(project.project_id)}
+          onReturnParent={currentBranch.parent_branch_id ? () => returnToParentBranch(project.project_id) : undefined}
+          onPromote={() => promoteBranch(project.project_id, currentBranch.branch_id)}
+        />
       )}
 
       {/* Messages Area */}
@@ -1901,38 +1876,14 @@ export default function ConversationStream() {
                       Edited
                     </span>
                   )}
-                  {/* Re-branch button (visible on hover) */}
-                  {!isSelectionActive && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleReBranch(node.node_id); }}
-                      className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-indigo-600 transition-all text-xs flex items-center gap-1"
-                      title="Re-Branch from Here"
-                    >
-                      <GitBranch size={12} />
-                      Branch
-                    </button>
-                  )}
-                  {/* Exclude/Include button (visible on hover) */}
-                  {!isSelectionActive && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleNodeInclusion(project.project_id, node.node_id); }}
-                      className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500 transition-all text-xs flex items-center gap-1"
-                      title="Cycle context state"
-                    >
-                      {isExcluded ? <Eye size={12} /> : <EyeOff size={12} />}
-                      Context
-                    </button>
-                  )}
-                  {!isSelectionActive && node.role !== 'system' && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); startEditingNode(node); }}
-                      className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-amber-600 transition-all text-xs flex items-center gap-1"
-                      title="Edit message"
-                    >
-                      <Pencil size={12} />
-                      Edit
-                    </button>
-                  )}
+                  <ConversationNodeHoverActions
+                    isSelectionActive={isSelectionActive}
+                    isExcluded={isExcluded}
+                    canEdit={node.role !== 'system'}
+                    onBranch={(e) => { e.stopPropagation(); handleReBranch(node.node_id); }}
+                    onToggleContext={(e) => { e.stopPropagation(); toggleNodeInclusion(project.project_id, node.node_id); }}
+                    onEdit={(e) => { e.stopPropagation(); startEditingNode(node); }}
+                  />
                 </div>
                 <div
                   id={`message-bubble-${node.node_id}`}
