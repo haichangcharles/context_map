@@ -131,7 +131,31 @@ const run = () => {
   assert.equal(stateAfterCase9.branches[branchC].parent_branch_id, suffixBranchId, 'case9: existing child branch should become nested under the trailing suffix branch');
   assert.equal(stateAfterCase9.branches[branchC].anchor_node_id, r4, 'case9: nested branch should keep its original anchor node');
 
-  useAppStore.getState().jumpToNode(projectId2, c2);
+  useAppStore.getState().undoStructureChange();
+  const stateAfterCase9Undo = useAppStore.getState();
+  assert.deepEqual(stateAfterCase9Undo.mainlines[projectId2], [r1, r2, r3, r4, r5], 'case9 undo: mainline should restore the pre-truncation path');
+  assert.equal(stateAfterCase9Undo.nodes[r4].branch_id, null, 'case9 undo: former trailing node should return to mainline');
+  assert.equal(stateAfterCase9Undo.nodes[r5].branch_id, null, 'case9 undo: trailing suffix should leave the auto branch');
+  assert.equal(stateAfterCase9Undo.branches[branchC].parent_branch_id, null, 'case9 undo: child branch should restore its original parent relation');
+  assert.ok(!stateAfterCase9Undo.branches[suffixBranchId as string], 'case9 undo: auto-created suffix branch should disappear');
+
+  useAppStore.getState().redoStructureChange();
+  const stateAfterCase9Redo = useAppStore.getState();
+  assert.deepEqual(stateAfterCase9Redo.mainlines[projectId2], [r1, r2, r3], 'case9 redo: mainline should return to the truncated path');
+  assert.equal(stateAfterCase9Redo.nodes[r4].branch_id, suffixBranchId, 'case9 redo: trailing node should rejoin the suffix branch');
+  assert.equal(stateAfterCase9Redo.nodes[r5].branch_id, suffixBranchId, 'case9 redo: trailing suffix should rejoin the suffix branch');
+  assert.equal(stateAfterCase9Redo.branches[suffixBranchId as string]?.anchor_node_id, r3, 'case9 redo: suffix branch should keep the new terminal anchor');
+  assert.equal(stateAfterCase9Redo.branches[branchC].parent_branch_id, suffixBranchId, 'case9 redo: child branch should reattach under the suffix branch');
+
+  useAppStore.setState((state) => ({
+    contexts: {
+      ...state.contexts,
+      [contextId2]: {
+        ...state.contexts[contextId2],
+        base_path: branchC,
+      },
+    },
+  }));
   useAppStore.getState().returnToParentBranch(projectId2);
   assert.equal(
     useAppStore.getState().contexts[contextId2].base_path,

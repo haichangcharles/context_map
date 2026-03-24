@@ -486,10 +486,19 @@ const deriveParentBranchIdFromAnchor = (
   projectId: string,
   anchorNodeId: string
 ): string | null => {
-  const anchorNode = state.nodes[anchorNodeId];
+  return deriveParentBranchIdFromGraph(projectId, anchorNodeId, state.nodes, state.branches);
+};
+
+const deriveParentBranchIdFromGraph = (
+  projectId: string,
+  anchorNodeId: string,
+  nodesById: Record<string, Node>,
+  branchesById: Record<string, Branch>
+): string | null => {
+  const anchorNode = nodesById[anchorNodeId];
   if (!anchorNode || anchorNode.project_id !== projectId) return null;
   if (!anchorNode.branch_id) return null;
-  const anchorBranch = state.branches[anchorNode.branch_id];
+  const anchorBranch = branchesById[anchorNode.branch_id];
   if (!anchorBranch || anchorBranch.project_id !== projectId) return null;
   return anchorBranch.branch_id;
 };
@@ -1945,6 +1954,21 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
 
         const existing = withNaturalOriginBranch(updatedNodes[node.node_id]);
         updatedNodes[node.node_id] = { ...existing, branch_id: branchId };
+      });
+
+      Object.values(updatedBranches).forEach((branch) => {
+        if (branch.project_id !== projectId) return;
+        const nextParentBranchId = deriveParentBranchIdFromGraph(
+          projectId,
+          branch.anchor_node_id,
+          updatedNodes,
+          updatedBranches
+        );
+        updatedBranches[branch.branch_id] = {
+          ...branch,
+          parent_branch_id:
+            nextParentBranchId && nextParentBranchId !== branch.branch_id ? nextParentBranchId : null,
+        };
       });
 
       return {
