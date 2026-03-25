@@ -20,6 +20,14 @@ const run = () => {
     structurePrompt,
     /The user may explicitly ask for more than one structural action at once/i
   );
+  assert.match(
+    structurePrompt,
+    /different paths for the same solution, or comparing two options within a single topic/i
+  );
+  assert.match(
+    structurePrompt,
+    /The user signals closure with messages like "okay, I understand"/i
+  );
 
   const userModel = buildUserModelFromBranchFeedback('user-1', {
     should_branch: [

@@ -103,5 +103,44 @@
 | What have I learned? | The user-visible miswiring came from stale `anchor_node_id`, not proven node duplication. |
 | What have I done? | Added the precise regression, fixed branch anchor recalculation, and re-verified mainline, nested branch, and lint checks. |
 
+## Session: 2026-03-25 Study Summary Request
+
+### Status
+- complete
+
+### Actions taken
+- Bootstrapped superpowers and loaded `terminal-title` plus `planning-with-files`.
+- Confirmed the root planning files belong to an earlier debugging task and should be extended rather than overwritten.
+- Located the likely study sources in `Study/` and `paper/sections/`.
+- Read the paper framing notes, abstract drafts, and `4_Probe_System.tex` to establish the conceptual and system-level role of `Contextify`.
+- Confirmed that `paper/sections/5_Study_Design.tex` is empty and that study-procedure details need to come from `Study/` notes.
+- Read the proposal, procedure, and materials/measures files to recover the study design, tasks, data sources, and analysis focus.
+- Confirmed that `paper/sections/6_Findings_and_Result.tex` is currently empty.
+- Read the working paper draft and study-overview notes to align the final wording around paradigm, probe role, and research questions.
+
+### Files created/modified
+- `task_plan.md` (updated)
+- `findings.md` (updated)
+- `progress.md` (updated)
+
+## Session: 2026-03-25 Structure Prompt Study Tuning
+
+### Status
+- complete
+
+### Actions taken
+- Bootstrapped superpowers and loaded `terminal-title`, `planning-with-files`, and `superpowers:brainstorming`.
+- Confirmed the request is best satisfied in `src/utils/promptBuilders.ts`, where the structure suggestion prompt defines the `branch` and `return_parent` example cases.
+- Chose an additive-only edit strategy: append one branch case for same-topic option/path exploration and one return case for local task closure.
+- Added prompt assertions in `scripts/test-structure-prompts.ts` to lock the new wording in place.
+- Ran `npm run test:structure-prompts` and confirmed the suite printed `Structure prompt tests passed.`.
+
+### Files created/modified
+- `task_plan.md` (updated)
+- `findings.md` (updated)
+- `progress.md` (updated)
+- `src/utils/promptBuilders.ts` (updated)
+- `scripts/test-structure-prompts.ts` (updated)
+
 ---
 *Update after completing each phase or encountering errors*

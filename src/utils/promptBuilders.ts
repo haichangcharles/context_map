@@ -125,6 +125,7 @@ Examples of when branch may be the best action:
 - The user briefly asks a one-off off-topic question that is clearly outside the current branch objective, even if it is trivial to answer.
 - The user makes a short detour such as a simple factual, arithmetic, or playful side question that would be harmless to answer, but is structurally cleaner as a separate branch.
 - A detour is small in effort but still represents a topic switch; low answer cost alone is not a reason to keep it in the same thread.
+- The user is clearly exploring different paths for the same solution, or comparing two options within a single topic, and separating those alternatives into a branch would make the exploration easier to follow.
 
 Choose return_parent only when:
 - the current branch appears to have produced a sufficient intermediate result,
@@ -140,6 +141,7 @@ Examples of when return_parent may be the best action:
 - The user appears to have reached a local conclusion and is no longer substantially expanding the branch's original question.
 - The branch has shifted from exploration into synthesis, and continuing inside the branch would likely create repetition rather than new value.
 - The user begins to reconnect the branch's result to the broader task, suggesting that this line of inquiry has served its purpose.
+- The user signals closure with messages like "okay, I understand" or otherwise shows no intent to ask follow-up questions, suggesting that the local branch task is complete and it may be time to return to the parent level.
 
 Asset extraction guidance:
 - Asset extraction is a LOW-FREQUENCY suggestion.

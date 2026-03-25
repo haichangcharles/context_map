@@ -48,5 +48,53 @@
 - None.
 
 ---
+
+## 2026-03-25 Study Summary Request
+
+### Early Findings
+- Existing planning files mostly document a separate branch-structure debugging task, not the study narrative itself.
+- The repository contains a dedicated `Study/` folder plus paper sections including `4_Probe_System.tex`, `5_Study_Design.tex`, `6_Findings_and_Result.tex`, and `9_Conclusions.tex`.
+- The active user request is interpretive: explain what study the system enabled, rather than modify code.
+
+### Source Review Round 1
+- The paper frames `Mixed-Initiative Context` as the main conceptual contribution: context becomes an explicit, structured, and operable object in human-AI collaboration.
+- `Contextify` is the probe system used to instantiate that concept in a conversational setting; the paper explicitly says the contribution is not a new chat UI by itself.
+- In `Contextify`, each user input and AI output is treated as an addressable node, and users can branch, include/exclude, edit, re-branch, and redefine the mainline path.
+- The context canvas makes structural operations explicit through node selection, state toggling, path restructuring, and pattern extraction.
+- The system also introduces mixed-initiative behavior at the context layer: AI can suggest branching, returning to the mainline, or extracting reusable patterns.
+- `paper/sections/5_Study_Design.tex` is currently empty, so the concrete study procedure must be reconstructed from the `Study/` folder rather than the paper section itself.
+
+### Source Review Round 2
+- The study is explicitly formative and probe-based, not a product benchmark; the baseline is familiar linear chat (e.g. ChatGPT), and the probe is the current system.
+- Design: within-subject, minimal-risk, remote moderated sessions with 6 participants, 45 minutes each, plus screen/audio recording, interviewer notes, and prototype interaction logs.
+- Each participant completes two matched open-ended hardware-concept ideation tasks under counterbalanced tool/task order.
+- The tasks are intentionally open enough to create multiple plausible paths, trade-offs, and topic shifts, so that context organization becomes naturally useful without instructing participants to branch.
+- Data collection focuses on behavior and interpretation: when users separate paths, include/exclude information, revisit earlier threads, accept or resist AI structure suggestions, and how they describe workflow, control, clarity, and cognitive load.
+- `paper/sections/6_Findings_and_Result.tex` is also empty; likely findings must be inferred from planning notes or later paper sections rather than that draft file.
+
+### Source Review Round 3
+- The most accurate one-sentence description is: the system supports a formative probe study of `Mixed-Initiative Context`, comparing a structured context-management prototype with linear chat in order to understand strategy, negotiation, and experience.
+- The study does not primarily ask whether the prototype is faster or better overall; it asks what changes when context becomes a first-class object of interaction.
+- The likely reporting structure is organized by three questions:
+  - how users strategically manage explicit context;
+  - how they understand and negotiate AI initiative in context organization;
+  - how the paradigm changes workflow, control, clarity, and cognitive burden.
+- Several paper section files (`5_Study_Design.tex`, `6_Findings_and_Result.tex`, `7_Design_Implications.tex`, `9_Conclusions.tex`) are still empty, so any description should be grounded in the `Study/` planning docs and working drafts rather than those section files.
+
+---
+
+## 2026-03-25 Structure Prompt Study Tuning
+
+### Early Findings
+- The active Branch / return suggestion behavior is defined in `buildStructureSuggestionSystemPrompt()` inside `src/utils/promptBuilders.ts`.
+- The existing prompt already separates guidance into `branch` and `return_parent` sections, each with explicit example bullets, so the safest change is additive.
+- `scripts/test-structure-prompts.ts` already verifies key structure-prompt phrases and is the minimal targeted regression point for these new cases.
+
+### Technical Decision
+| Decision | Rationale |
+|----------|-----------|
+| Add one new example bullet under `branch` and one under `return_parent` | This satisfies the request to add two cases only, without rewriting existing prompt logic or instructions. |
+
+---
 *Update this file after every 2 view/browser/search operations*
 *This prevents visual information from being lost*
