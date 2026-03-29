@@ -20,7 +20,7 @@ const run = () => {
 
   const contextId = useAppStore.getState().projects[projectId].active_context_id;
 
-  // Mainline node starts effectively included via natural path.
+  // Mainline node starts naturally active.
   useAppStore.getState().cycleNodeInclusionState(projectId, n1);
   let context = useAppStore.getState().contexts[contextId];
   assert.deepEqual(context.included_nodes, [], 'active natural node should not become explicitly included');
@@ -28,26 +28,50 @@ const run = () => {
 
   useAppStore.getState().cycleNodeInclusionState(projectId, n1);
   context = useAppStore.getState().contexts[contextId];
-  assert.deepEqual(context.included_nodes, [n1], 'second click should move active node into explicit include');
-  assert.deepEqual(context.excluded_nodes, [], 'second click should clear exclude');
+  assert.deepEqual(context.included_nodes, [], 'second click should restore active natural node back to natural');
+  assert.deepEqual(context.excluded_nodes, [], 'second click should clear the explicit exclude');
 
-  useAppStore.getState().cycleNodeInclusionState(projectId, n1);
-  context = useAppStore.getState().contexts[contextId];
-  assert.deepEqual(context.included_nodes, [], 'third click should clear explicit include');
-  assert.deepEqual(context.excluded_nodes, [n1], 'third click should return to excluded state');
-
-  // Branch node starts effectively excluded while mainline context is active.
+  // Branch node starts naturally outside the mainline context.
   useAppStore.getState().cycleNodeInclusionState(projectId, b1);
   context = useAppStore.getState().contexts[contextId];
   assert.deepEqual(context.included_nodes, [b1], 'inactive natural node should become included on first click');
-  assert.deepEqual(context.excluded_nodes, [n1], 'inactive natural node first click should preserve other explicit excludes');
+  assert.deepEqual(context.excluded_nodes, [], 'inactive natural node first click should not create unrelated excludes');
 
   useAppStore.getState().cycleNodeInclusionState(projectId, b1);
   context = useAppStore.getState().contexts[contextId];
   assert.deepEqual(context.included_nodes, [], 'second click should clear explicit include for inactive node');
-  assert.deepEqual(context.excluded_nodes.sort(), [b1, n1].sort(), 'second click should exclude inactive node');
+  assert.deepEqual(context.excluded_nodes, [], 'second click should restore inactive node back to natural');
 
-  console.log('Node inclusion toggle behaves as explicit two-state toggle.');
+  // Batch include should ensure nodes are in context without creating redundant overrides.
+  useAppStore.getState().batchToggleInclusion(projectId, [n1, b1], 'include');
+  context = useAppStore.getState().contexts[contextId];
+  assert.deepEqual(context.included_nodes, [b1], 'include should only create explicit include for nodes naturally outside context');
+  assert.deepEqual(context.excluded_nodes, [], 'include should clear explicit excludes without creating redundant ones');
+
+  // Batch exclude should ensure nodes are out of context without creating redundant overrides.
+  useAppStore.getState().batchToggleInclusion(projectId, [n1, b1], 'exclude');
+  context = useAppStore.getState().contexts[contextId];
+  assert.deepEqual(context.included_nodes, [], 'exclude should clear explicit includes');
+  assert.deepEqual(context.excluded_nodes, [n1], 'exclude should only create explicit excludes for nodes naturally in context');
+
+  // Natural should clear all explicit overrides.
+  useAppStore.getState().batchToggleInclusion(projectId, [n1, b1], 'natural');
+  context = useAppStore.getState().contexts[contextId];
+  assert.deepEqual(context.included_nodes, [], 'natural should clear explicit includes');
+  assert.deepEqual(context.excluded_nodes, [], 'natural should clear explicit excludes');
+
+  // Invert should flip effective membership and return to natural when run twice.
+  useAppStore.getState().batchToggleInclusion(projectId, [n1, b1], 'invert');
+  context = useAppStore.getState().contexts[contextId];
+  assert.deepEqual(context.included_nodes, [b1], 'invert should pull naturally hidden nodes into context');
+  assert.deepEqual(context.excluded_nodes, [n1], 'invert should push naturally active nodes out of context');
+
+  useAppStore.getState().batchToggleInclusion(projectId, [n1, b1], 'invert');
+  context = useAppStore.getState().contexts[contextId];
+  assert.deepEqual(context.included_nodes, [], 'second invert should clear explicit include back to natural');
+  assert.deepEqual(context.excluded_nodes, [], 'second invert should clear explicit exclude back to natural');
+
+  console.log('Node inclusion toggle supports natural reset and deterministic invert semantics.');
 };
 
 run();

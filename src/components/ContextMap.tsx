@@ -4,11 +4,12 @@ import { ReactFlow, Background, Controls, Node as FlowNode, Edge, Position, Mark
 import '@xyflow/react/dist/style.css';
 import { Node, Branch, PatternType, SelectionNotice, DeleteSelectionPreview } from '../types';
 import clsx from 'clsx';
-import { Eye, EyeOff, GitBranch, Undo2, Redo2, RotateCcw, History, ArrowRightLeft, X, Info, CheckCircle2, TriangleAlert, CircleAlert, Trash2, Plus, Minus, MousePointerSquareDashed, Rows3, Sparkles, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Eye, GitBranch, Undo2, Redo2, RotateCcw, History, ArrowRightLeft, X, Info, CheckCircle2, TriangleAlert, CircleAlert, Trash2, Plus, Minus, MousePointerSquareDashed, Rows3, Sparkles, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import dagre from 'dagre';
 import { buildQAPair, logBranchDebug, logContextMapDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { extractPatternByType } from '../services/gemini';
 import { CONTEXT_MAP_SELECTION_BODY_CLASS, syncBodyClassToggle } from '../utils/contextMapInteraction';
+import { resolveContextMapNodeVisualState } from '../utils/contextMapNodeState';
 import { getProjectNodeSearchResults, stepNodeSearchIndex } from '../utils/nodeSearch';
 import { getNodeIdsIntersectingSelectionRect } from '../utils/selectionState';
 import ContextMapModeStrip from './shared/ContextMapModeStrip';
@@ -25,14 +26,31 @@ const CustomNode = ({ data }: { data: any }) => {
   const isPlaceholder = data.isPlaceholder;
   const isSearchMatch = data.isSearchMatch;
   const isSearchCurrent = data.isSearchCurrent;
+  const visualState = resolveContextMapNodeVisualState({ isActive, isIncluded, isExcluded });
+  const surfaceClass = {
+    active: 'border-indigo-500 bg-indigo-50 shadow-[0_10px_20px_rgba(79,70,229,0.12)]',
+    included: 'border-emerald-500 bg-emerald-50 shadow-[0_10px_20px_rgba(16,185,129,0.14)]',
+    visible: 'border-zinc-300 bg-white shadow-[0_8px_18px_rgba(15,23,42,0.08)]',
+    excluded: 'border-dashed border-rose-400 bg-rose-50 shadow-[0_10px_22px_rgba(244,63,94,0.08)]',
+  }[visualState];
+  const badgeClass = {
+    active: 'border-indigo-200 bg-indigo-100 text-indigo-700',
+    included: 'border-emerald-200 bg-emerald-100 text-emerald-700',
+    visible: 'border-zinc-200 bg-zinc-100 text-zinc-600',
+    excluded: 'border-rose-200 bg-rose-100 text-rose-700',
+  }[visualState];
+  const statusLabel = {
+    active: 'Active',
+    included: 'Included',
+    visible: 'Visible',
+    excluded: 'Excluded',
+  }[visualState];
   
   return (
     <div 
       className={clsx(
         "px-3 py-2 shadow-md rounded-md border-2 text-xs w-48 transition-all cursor-pointer relative",
-        isActive ? "border-indigo-500 bg-indigo-50" : "border-zinc-200 bg-white",
-        isExcluded && "opacity-50 border-dashed border-red-300 bg-red-50",
-        isIncluded && !isActive && "border-emerald-500 bg-emerald-50",
+        surfaceClass,
         isSearchMatch && !isSearchCurrent && "border-amber-400 bg-amber-50 ring-2 ring-amber-100 ring-offset-1",
         isSearchCurrent && "border-amber-500 bg-amber-100 ring-4 ring-amber-300 ring-offset-2 shadow-[0_0_0_1px_rgba(245,158,11,0.28)]",
         isSelected && !isDeleteSelected && "border-sky-500 ring-2 ring-sky-300 ring-offset-1 shadow-[0_0_0_1px_rgba(14,165,233,0.25)]",
@@ -47,9 +65,11 @@ const CustomNode = ({ data }: { data: any }) => {
         <span className="font-semibold text-zinc-700 uppercase tracking-wider text-[10px]">
           {data.role}
         </span>
-        {isExcluded ? <EyeOff size={12} className="text-red-400" /> : <Eye size={12} className="text-zinc-400" />}
+        <span className={clsx("inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em]", badgeClass)}>
+          {statusLabel}
+        </span>
       </div>
-      <div className="text-zinc-600 truncate">
+      <div className={clsx("truncate", visualState === 'excluded' ? "text-rose-700" : "text-zinc-600")}>
         {data.content}
       </div>
       {isSelected && (
@@ -57,17 +77,25 @@ const CustomNode = ({ data }: { data: any }) => {
           ✓
         </div>
       )}
-      {data.branchId && (
-        <div className="mt-1 flex items-center gap-1 text-[9px] text-indigo-600 bg-indigo-100 px-1 py-0.5 rounded-sm w-fit">
-          <GitBranch size={10} />
-          Branch
-        </div>
-      )}
-      {isPlaceholder && (
-        <div className="mt-1 flex items-center gap-1 text-[9px] text-amber-700 bg-amber-100 px-1 py-0.5 rounded-sm w-fit">
-          Placeholder
-        </div>
-      )}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        {data.branchId && (
+          <div className="flex items-center gap-1 rounded-sm bg-indigo-100 px-1.5 py-0.5 text-[9px] text-indigo-600">
+            <GitBranch size={10} />
+            Branch
+          </div>
+        )}
+        {isPlaceholder && (
+          <div className="flex items-center gap-1 rounded-sm bg-amber-100 px-1.5 py-0.5 text-[9px] text-amber-700">
+            Placeholder
+          </div>
+        )}
+        {!data.branchId && !isPlaceholder && (
+          <div className="flex items-center gap-1 rounded-sm bg-transparent px-0 py-0.5 text-[9px] text-zinc-400">
+            {visualState === 'visible' && <Eye size={10} />}
+            {visualState === 'visible' ? 'Structure only' : ''}
+          </div>
+        )}
+      </div>
       <Handle type="source" position={Position.Bottom} className="w-2 h-2 bg-zinc-400" />
       <Handle type="target" position={Position.Left} id="left" className="w-2 h-2 bg-indigo-400" />
       <Handle type="source" position={Position.Left} id="left" className="w-2 h-2 bg-indigo-400" />
@@ -1363,7 +1391,7 @@ export default function ContextMap() {
     setPendingDeletePreview(null);
   }, [selectedNodeIds, selectionIntent]);
 
-  const handleApplySelection = (action: 'include' | 'exclude') => {
+  const handleApplySelection = (action: 'include' | 'exclude' | 'natural' | 'invert') => {
     if (!project || !context) return;
     const selectedIds = [...selectedNodeIds];
     if (selectedIds.length === 0) return;
@@ -1373,7 +1401,7 @@ export default function ContextMap() {
 
   const handleInvertSelection = () => {
     if (!project || selectedNodeIds.length === 0) return;
-    selectedNodeIds.forEach((nodeId) => cycleNodeInclusionState(project.project_id, nodeId));
+    batchToggleInclusion(project.project_id, selectedNodeIds, 'invert');
     finishSelectionMode();
   };
 
@@ -1662,7 +1690,6 @@ export default function ContextMap() {
           <Controls showInteractive={false} />
         </ReactFlow>
 
-        {/* Floating View Controls */}
         <div
           data-context-map-toolbar
           className="absolute right-4 left-auto top-4 z-20 flex max-w-[calc(100%-5rem)] items-center justify-end gap-2"
@@ -1948,6 +1975,7 @@ export default function ContextMap() {
               isBusy={isBatchBusy}
               onInclude={() => handleApplySelection('include')}
               onExclude={() => handleApplySelection('exclude')}
+              onNatural={() => handleApplySelection('natural')}
               onInvert={handleInvertSelection}
               onPatternTypeChange={setPendingPatternType}
               onExtract={() => void handleExtractPatternFromSelection()}
@@ -2065,15 +2093,19 @@ export default function ContextMap() {
       <div className="p-3 bg-white border-t border-zinc-200 text-xs flex flex-wrap gap-3 text-zinc-600">
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 border-2 border-indigo-500 bg-indigo-50 rounded-sm"></div>
-          Active Path
+          Active context
         </div>
         <div className="flex items-center gap-1">
           <div className="w-3 h-3 border-2 border-emerald-500 bg-emerald-50 rounded-sm"></div>
-          Included
+          Explicit include
         </div>
         <div className="flex items-center gap-1">
-          <div className="w-3 h-3 border-2 border-dashed border-red-300 bg-red-50 rounded-sm"></div>
-          Excluded
+          <div className="w-3 h-3 border-2 border-zinc-300 bg-white rounded-sm"></div>
+          Visible only
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-3 h-3 border-2 border-dashed border-rose-400 bg-rose-50 rounded-sm"></div>
+          Explicit exclude
         </div>
       </div>
     </div>

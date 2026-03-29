@@ -11,6 +11,7 @@ type BatchProps = {
   isBusy?: boolean;
   onInclude: () => void;
   onExclude: () => void;
+  onNatural: () => void;
   onInvert: () => void;
   onPatternTypeChange: (next: PatternType) => void;
   onExtract: () => void;
@@ -79,6 +80,20 @@ export default function ContextMapSelectionActionBar(props: Props) {
             {!props.iconOnlyActionBar && 'Exclude'}
           </button>
           <button
+            onClick={props.onNatural}
+            disabled={props.isBusy || props.selectedCount === 0}
+            className={clsx(
+              'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors',
+              props.isBusy || props.selectedCount === 0
+                ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                : 'border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100'
+            )}
+            title="Clear explicit include/exclude overrides and return to natural context state"
+          >
+            <X size={14} />
+            {!props.iconOnlyActionBar && 'Natural'}
+          </button>
+          <button
             onClick={props.onInvert}
             disabled={props.isBusy || props.selectedCount === 0}
             className={clsx(
@@ -87,6 +102,7 @@ export default function ContextMapSelectionActionBar(props: Props) {
                 ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
                 : 'border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100'
             )}
+            title="Flip whether the selected nodes are currently in the context"
           >
             <ArrowRightLeft size={14} />
             {!props.iconOnlyActionBar && 'Invert'}

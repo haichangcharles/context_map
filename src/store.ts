@@ -17,6 +17,8 @@ type StructureSnapshot = {
   deletedNodeIds: string[];
 };
 
+type NodeInclusionAction = 'include' | 'exclude' | 'natural' | 'invert';
+
 interface AppState {
   projects: Record<string, Project>;
   nodes: Record<string, Node>;
@@ -63,6 +65,7 @@ interface AppState {
   disablePatternForType: (projectId: string, contextId: string, type: PatternType) => void;
   
   updateBranchSummary: (branchId: string, summary: string) => void;
+  updateBranchCompletionSummary: (branchId: string, summary: string) => void;
   createPattern: (input: {
     type: PatternType;
     name: string;
@@ -79,7 +82,7 @@ interface AppState {
   ) => void;
   approvePattern: (patternId: string) => void;
   deletePattern: (patternId: string) => void;
-  batchToggleInclusion: (projectId: string, nodeIds: string[], action: 'include' | 'exclude') => void;
+  batchToggleInclusion: (projectId: string, nodeIds: string[], action: NodeInclusionAction) => void;
   setMainlineEndpoints: (projectId: string, startId: string, endId: string) => void;
   previewDeleteSelectedNodes: (projectId: string, nodeIds: string[]) => DeleteSelectionPreview | null;
   deleteSelectedNodes: (projectId: string, nodeIds: string[]) => DeleteSelectionPreview | null;
@@ -614,6 +617,70 @@ const ensureNonEmptyMainline = (
   }
 
   return { mainline: [fallbackNodeId], repairedNodeId: fallbackNodeId };
+};
+
+const resolveNodeInclusionResolution = (input: {
+  projectId: string;
+  nodeId: string;
+  context: ContextView;
+  nodesById: Record<string, Node>;
+  branchesById: Record<string, Branch>;
+  mainlinesByProject: Record<string, string[]>;
+}) => {
+  const resolvedMainline = (input.mainlinesByProject[input.projectId] || []).filter(
+    (id) => input.nodesById[id]?.project_id === input.projectId
+  );
+  const naturalVisibleIds = resolveVisibleNodeIdsForBasePath(
+    input.projectId,
+    input.context.base_path,
+    input.branchesById,
+    input.nodesById,
+    resolvedMainline
+  );
+
+  const isExplicitlyIncluded = input.context.included_nodes.includes(input.nodeId);
+  const isExplicitlyExcluded = input.context.excluded_nodes.includes(input.nodeId);
+  const isNaturallyActive = naturalVisibleIds.has(input.nodeId);
+  const isEffectivelyIncluded = (isNaturallyActive && !isExplicitlyExcluded) || isExplicitlyIncluded;
+
+  return {
+    isExplicitlyIncluded,
+    isExplicitlyExcluded,
+    isNaturallyActive,
+    isEffectivelyIncluded,
+  };
+};
+
+const applyNodeInclusionAction = (input: {
+  nodeId: string;
+  includedNodes: string[];
+  excludedNodes: string[];
+  resolution: ReturnType<typeof resolveNodeInclusionResolution>;
+  action: NodeInclusionAction;
+}) => {
+  let nextIncluded = input.includedNodes.filter((id) => id !== input.nodeId);
+  let nextExcluded = input.excludedNodes.filter((id) => id !== input.nodeId);
+
+  let resolvedAction = input.action;
+  if (resolvedAction === 'invert') {
+    resolvedAction = input.resolution.isEffectivelyIncluded ? 'exclude' : 'include';
+  }
+
+  if (resolvedAction === 'natural') {
+    return { includedNodes: nextIncluded, excludedNodes: nextExcluded };
+  }
+
+  if (resolvedAction === 'include') {
+    if (!input.resolution.isNaturallyActive) {
+      nextIncluded.push(input.nodeId);
+    }
+    return { includedNodes: nextIncluded, excludedNodes: nextExcluded };
+  }
+
+  if (input.resolution.isNaturallyActive) {
+    nextExcluded.push(input.nodeId);
+  }
+  return { includedNodes: nextIncluded, excludedNodes: nextExcluded };
 };
 
 type DeleteStructureResult = {
@@ -1630,38 +1697,35 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       if (!context) return state;
       const node = state.nodes[nodeId];
       if (!node || node.project_id !== projectId) return state;
-      const resolvedMainline = (state.mainlines[projectId] || []).filter((id) => state.nodes[id]?.project_id === projectId);
-      const naturalVisibleIds = resolveVisibleNodeIdsForBasePath(
+      const resolution = resolveNodeInclusionResolution({
         projectId,
-        context.base_path,
-        state.branches,
-        state.nodes,
-        resolvedMainline
-      );
-
-      let newIncluded = [...context.included_nodes];
-      let newExcluded = [...context.excluded_nodes];
-      const isExplicitlyIncluded = newIncluded.includes(nodeId);
-      const isExplicitlyExcluded = newExcluded.includes(nodeId);
-      const isNaturallyActive = naturalVisibleIds.has(nodeId);
-      const isEffectivelyIncluded = (isNaturallyActive && !isExplicitlyExcluded) || isExplicitlyIncluded;
-
-      newIncluded = newIncluded.filter((id) => id !== nodeId);
-      newExcluded = newExcluded.filter((id) => id !== nodeId);
-
-      if (isEffectivelyIncluded) {
-        newExcluded.push(nodeId);
-      } else {
-        newIncluded.push(nodeId);
-      }
+        nodeId,
+        context,
+        nodesById: state.nodes,
+        branchesById: state.branches,
+        mainlinesByProject: state.mainlines,
+      });
+      const nextAction: NodeInclusionAction =
+        resolution.isExplicitlyIncluded || resolution.isExplicitlyExcluded
+          ? 'natural'
+          : resolution.isNaturallyActive
+            ? 'exclude'
+            : 'include';
+      const { includedNodes, excludedNodes } = applyNodeInclusionAction({
+        nodeId,
+        includedNodes: context.included_nodes,
+        excludedNodes: context.excluded_nodes,
+        resolution,
+        action: nextAction,
+      });
 
       return {
         contexts: {
           ...state.contexts,
           [context.context_id]: {
             ...context,
-            included_nodes: newIncluded,
-            excluded_nodes: newExcluded,
+            included_nodes: includedNodes,
+            excluded_nodes: excludedNodes,
           },
         },
       };
@@ -1724,6 +1788,19 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
         branches: {
           ...state.branches,
           [branchId]: { ...branch, mainline_summary: summary },
+        },
+      };
+    });
+  },
+
+  updateBranchCompletionSummary: (branchId, summary) => {
+    set((state) => {
+      const branch = state.branches[branchId];
+      if (!branch) return state;
+      return {
+        branches: {
+          ...state.branches,
+          [branchId]: { ...branch, branch_summary: summary },
         },
       };
     });
@@ -1832,19 +1909,37 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   batchToggleInclusion: (projectId, nodeIds, action) => {
     set((state) => {
       const project = state.projects[projectId];
+      if (!project) return state;
       const context = state.contexts[project.active_context_id];
+      if (!context) return state;
       
       let newIncluded = [...context.included_nodes];
       let newExcluded = [...context.excluded_nodes];
 
-      nodeIds.forEach(nodeId => {
-        if (action === 'exclude') {
-          newIncluded = newIncluded.filter(id => id !== nodeId);
-          if (!newExcluded.includes(nodeId)) newExcluded.push(nodeId);
-        } else {
-          newExcluded = newExcluded.filter(id => id !== nodeId);
-          if (!newIncluded.includes(nodeId)) newIncluded.push(nodeId);
-        }
+      nodeIds.forEach((nodeId) => {
+        const node = state.nodes[nodeId];
+        if (!node || node.project_id !== projectId) return;
+        const resolution = resolveNodeInclusionResolution({
+          projectId,
+          nodeId,
+          context: {
+            ...context,
+            included_nodes: newIncluded,
+            excluded_nodes: newExcluded,
+          },
+          nodesById: state.nodes,
+          branchesById: state.branches,
+          mainlinesByProject: state.mainlines,
+        });
+        const result = applyNodeInclusionAction({
+          nodeId,
+          includedNodes: newIncluded,
+          excludedNodes: newExcluded,
+          resolution,
+          action,
+        });
+        newIncluded = result.includedNodes;
+        newExcluded = result.excludedNodes;
       });
 
       return {

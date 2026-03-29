@@ -176,12 +176,13 @@ export default function TutorialView() {
     });
   };
 
-  const applyGovernanceAction = (action: 'include' | 'exclude' | 'invert') => {
+  const applyGovernanceAction = (action: 'include' | 'exclude' | 'natural' | 'invert') => {
     setGovernanceNodes((current) =>
       current.map((node) => {
         if (!selectedGovernanceIds.includes(node.id)) return node;
         if (action === 'include') return { ...node, state: 'included' };
         if (action === 'exclude') return { ...node, state: 'excluded' };
+        if (action === 'natural') return { ...node, state: 'active' };
         if (node.state === 'included') return { ...node, state: 'excluded' };
         if (node.state === 'excluded') return { ...node, state: 'included' };
         return { ...node, state: 'included' };
@@ -554,6 +555,7 @@ export default function TutorialView() {
                         pendingPatternType={patternType}
                         onInclude={() => applyGovernanceAction('include')}
                         onExclude={() => applyGovernanceAction('exclude')}
+                        onNatural={() => applyGovernanceAction('natural')}
                         onInvert={() => applyGovernanceAction('invert')}
                         onPatternTypeChange={setPatternType}
                         onExtract={() => setPatternPathwayView('manual')}

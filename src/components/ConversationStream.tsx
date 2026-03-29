@@ -4,7 +4,7 @@ import { Node, Branch, Pattern, PatternType } from '../types';
 import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Square, X, Check, TriangleAlert, ChevronLeft, ChevronRight, Rows3, Pencil } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
-import { detectStructureSuggestion, extractPatternByType, generateResponseStream, generateMainlineSummary } from '../services/gemini';
+import { detectStructureSuggestion, extractPatternByType, generateResponseStream, generateMainlineSummary, generateBranchSummary } from '../services/gemini';
 import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
 import { flushChatHistoryQueue, logChatNode } from '../services/chatHistory';
 import {
@@ -248,7 +248,7 @@ export default function ConversationStream() {
   const { 
     projects, activeProjectId, nodes, branches, mainlines, contexts, patterns,
     addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, returnToParentBranch, toggleNodeInclusion,
-    updateBranchSummary, updatePattern, approvePattern, deletePattern, createPattern,
+    updateBranchSummary, updateBranchCompletionSummary, updatePattern, approvePattern, deletePattern, createPattern,
     enablePatternForType, disablePatternForType, updateNodeContent,
     editNodeContent,
     isNodeSelectionMode, nodeSelectionIntent, selectedNodeIds, toggleNodeSelection
@@ -953,10 +953,18 @@ export default function ConversationStream() {
     };
 
     try {
+      const effectiveNodeIds = new Set(allEffectiveNodes.map((n) => n.node_id));
+      const visibleBranchSummaries = isMainline
+        ? Object.values(branches)
+            .filter((b) => b.branch_summary && effectiveNodeIds.has(b.anchor_node_id))
+            .map((b) => b.branch_summary!)
+        : [];
+
       const systemPrompt = buildConversationSystemPrompt({
         isMainline,
         branchAnchorNodeId: currentBranch?.anchor_node_id || null,
         mainlineSummary: currentBranch?.mainline_summary || '',
+        branchSummaries: visibleBranchSummaries,
       });
       
       const responseText = await generateResponseStream(
@@ -1466,6 +1474,18 @@ export default function ConversationStream() {
     }
   };
 
+  const triggerBranchSummaryGeneration = (branchId: string) => {
+    const branch = branches[branchId];
+    if (!branch || branch.branch_summary) return;
+    const branchNodes = Object.values(nodes)
+      .filter((n) => n.branch_id === branchId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    if (branchNodes.length === 0) return;
+    generateBranchSummary(branchNodes).then((summary) => {
+      if (summary) updateBranchCompletionSummary(branchId, summary);
+    });
+  };
+
   const handleAcceptReturnSuggestion = () => {
     if (
       structureActionInFlight ||
@@ -1476,8 +1496,10 @@ export default function ConversationStream() {
     }
 
     setStructureActionInFlight('return');
+    const returningBranchId = context?.base_path !== 'mainline' ? context?.base_path : null;
     try {
       returnToParentBranch(project.project_id);
+      if (returningBranchId) triggerBranchSummaryGeneration(returningBranchId);
       if (pendingStructureSuggestion.returnSuggestionId && pendingStructureSuggestion.returnShownAt) {
         logSuggestionEvent(
           'return_parent',
@@ -1758,8 +1780,16 @@ export default function ConversationStream() {
         <BranchStatusBar
           anchorPreview={`${nodes[currentBranch.anchor_node_id]?.content.substring(0, 20)}...`}
           canReturnParent={!!currentBranch.parent_branch_id}
-          onReturnMainline={() => returnToMainline(project.project_id)}
-          onReturnParent={currentBranch.parent_branch_id ? () => returnToParentBranch(project.project_id) : undefined}
+          onReturnMainline={() => {
+            const branchId = currentBranch.branch_id;
+            returnToMainline(project.project_id);
+            triggerBranchSummaryGeneration(branchId);
+          }}
+          onReturnParent={currentBranch.parent_branch_id ? () => {
+            const branchId = currentBranch.branch_id;
+            returnToParentBranch(project.project_id);
+            triggerBranchSummaryGeneration(branchId);
+          } : undefined}
           onPromote={() => promoteBranch(project.project_id, currentBranch.branch_id)}
         />
       )}

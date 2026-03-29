@@ -14,6 +14,7 @@
     "test:accept-branch": "tsx scripts/test-accept-suggested-branch.ts",
     "test:delete-selection": "tsx scripts/test-delete-selected-nodes.ts",
     "test:selection-mode": "tsx scripts/test-selection-mode-toggle.ts",
+    "test:context-map-state": "tsx scripts/test-context-map-node-state.ts",
     "test:nested-branch": "tsx scripts/test-nested-branch.ts",
     "test:stream-truncation": "tsx scripts/test-stream-truncation.ts",
     "test:message-edit": "tsx scripts/test-message-edit.ts",

@@ -1,100 +1,119 @@
 # Findings & Decisions
 
 ## Requirements
-- Investigate a new bug where choosing a mainline start and a branch endpoint with nested sub-branches appears to make the system “explode” from about 18 nodes to about 32.
-- Determine whether the inflation is in stored nodes, visible-node projection, or Context Map layout/render state.
-- Avoid blind fixes until the exact failing structure is understood.
+- User wants a new Codex skill for creating teaser figures used in top HCI conference submissions.
+- The skill should help with paper-cover / teaser-figure style work rather than general illustration.
+- The user pointed at `/Users/charles/Downloads/paper-cover-figure.skill`, which is a packaged skill artifact and likely a starting draft.
 
 ## Research Findings
-- The task is specifically about resetting the mainline to an interior node, not appending a new branch from the current tail.
-- The expected graph invariant is "mainline remains contiguous, truncated suffix survives as a branch."
-- `src/store.ts` contains the main application graph logic for `mainline`, `branch`, and `anchor` state.
-- `scripts/test-mainline-endpoints.ts` already appears to cover mainline endpoint behavior and is the most likely place for the new regression test.
-- `setMainlineEndpoints(projectId, startId, endId)` computes an undirected shortest path between the two selected nodes, makes exactly that path the new mainline, then auto-branches any nodes that fell out of mainline and previously had `branch_id === null`.
-- Auto branches are currently grouped by the nearest ancestor that remains on the new mainline, and new branch records are created with `anchor_node_id` equal to that ancestor.
-- The missing logic was not the suffix auto-branch itself; it was the existing child branches under that suffix. Their `parent_branch_id` stayed `null`, so they did not become nested under the new suffix branch.
-- A regression scenario that truncates `r1 -> r2 -> r3 -> r4 -> r5` down to `r1 -> r2 -> r3` while keeping a child branch anchored at `r4` failed before the fix and now passes.
-- Undo/redo already restores this reanchored parent relation because structure history snapshots store the full `branches` table, not only the `mainline`.
-- The new bug report is different from the previous reanchor bug: it suggests node-count inflation after choosing a mainline start and a branch endpoint that still has nested sub-branches beneath it.
-- Both [src/components/ConversationStream.tsx](/Users/charles/Downloads/context_map/src/components/ConversationStream.tsx) and [src/components/ContextMap.tsx](/Users/charles/Downloads/context_map/src/components/ContextMap.tsx) maintain their own `resolveVisibleNodesForBasePath` implementation, so a projection-layer duplication bug is plausible even if `state.nodes` itself stays at 18.
-- In two synthetic nested-branch graphs and the built-in tutorial graph, `state.nodes` count remained constant after `setMainlineEndpoints`, visible-node projections did not produce duplicate `node_id`s, and computed Context Map node count did not exceed project node count.
-- In those same synthetic runs, a different structural inconsistency appeared: when the mainline absorbs only the prefix of a branch, the surviving remainder of that branch keeps its old `anchor_node_id` instead of rebasing to the new split point.
-- That stale anchor causes branch views to lose the newly promoted prefix context. Example: after selecting `n2 -> a3`, the remaining branch rooted conceptually at `a3` still reports `anchor_node_id = n3`, so its visible path becomes `[n2, n3, a4, a5]` instead of including the promoted prefix through `a3`.
-- The user-provided UI reproduction (`User 2` as mainline start, `User 5` as mainline end) matches this exact failure mode: `Assistant 5` stayed attached to the original branch anchor near `User 2` instead of becoming a branch off `User 5`.
-- A focused regression test confirmed the bug and passed after re-deriving each branch's `anchor_node_id` from the first remaining node in that branch after `setMainlineEndpoints` rewrites node membership.
+- The repository-level instructions required running the superpowers bootstrap before any other task work.
+- Relevant skills for this task are `terminal-title`, `planning-with-files`, `skill-creator`, `superpowers:brainstorming`, `superpowers:test-driven-development`, `superpowers:writing-plans`, and `superpowers:writing-skills`.
+- The uploaded `.skill` file is a zip archive containing:
+  - `paper-cover-figure/SKILL.md`
+  - `paper-cover-figure/references/archetypes.md`
+  - `paper-cover-figure/references/example_prompt.md`
+- `skill-creator` recommends defaulting new skills to `~/.codex/skills` when the user does not specify a location.
+- `writing-skills` expects RED/GREEN/REFACTOR validation, but subagents are unavailable in this Codex environment, so validation must be approximated with manual scenario checks.
+- The packaged `SKILL.md` is usable as source material but is too long for a lean skill and over-optimizes for one output mode: generating prompts for image-generation tools.
+- The packaged draft contains strong domain knowledge worth preserving:
+  - HCI teaser figures should teach the contribution within about 10 seconds.
+  - Figure choice benefits from reusable archetypes such as scenario, pipeline, comparison, photo grid, and layered architecture.
+  - A separate text-overlay plan matters because final academic figures are usually finished in Figma, Illustrator, or Keynote rather than accepted directly from an image model.
+- The packaged draft also carries avoidable bloat:
+  - Overly detailed image-generator prompt micro-specification.
+  - Venue-specific examples embedded directly in the main skill body.
+  - Repetition that belongs in references rather than `SKILL.md`.
+- Manual spot checks against two realistic requests suggest the rewritten skill behaves correctly:
+  - A collaborative AR sensemaking paper naturally maps to `Scenario + architecture hybrid`.
+  - A baseline-vs-new-interface improvement paper naturally maps to `Paired comparison`.
+  - In both cases, the skill defaults to an editable figure brief and text-overlay plan rather than forcing an image-generation workflow.
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Do not patch the reported explosion blindly yet | Current diagnostic sweeps do not reproduce real node-count inflation. |
-| Treat stale `anchor_node_id` after partial branch promotion as the leading root-cause candidate | It is a concrete inconsistency observed in the model after `setMainlineEndpoints`. |
-| Fix branch remainder anchoring before chasing projection-layer duplication theories | The user-provided reproduction maps cleanly to this structural bug and the regression is now reproducible. |
+| Treat the uploaded package as an input artifact, not automatically as the final deliverable | The package may already contain a draft, but it still needs quality review against the user's actual HCI teaser-figure use case. |
+| Create planning files in the workspace root | Required by `planning-with-files`. |
+| Rewrite the skill into a leaner version instead of installing the packaged draft verbatim | The current draft is too narrow and too long for efficient skill invocation. |
+| Keep archetypes and worked prompts in `references/` | They are useful but should not bloat the main skill body. |
+| Produce both an installed skill and a packaged `.skill` artifact | The installed version is directly usable by Codex, while the archive is portable. |
 
 ## Issues Encountered
 | Issue | Resolution |
 |-------|------------|
-| `tsx` test commands could not open their IPC pipe inside the sandbox | Re-ran targeted tests with escalated permissions. |
-| The reported “18 -> 32 nodes” symptom was not reproducible in synthetic or tutorial graphs | Narrowed the likely root cause to a graph-shape-specific projection bug or stale branch-anchor metadata. |
+| `superpowers-codex use-skill skill-creator` failed | The correct superpowers name is `.system/skill-creator`, while the personal skill content was still directly readable from the provided path. |
+| Terminal title helper could not write a temporary file in `.claude` | Ignored after confirming the escape sequence still set the title. |
 
 ## Resources
-- `task_plan.md`
-- `src/store.ts`
-- `scripts/test-mainline-endpoints.ts`
-- `scripts/test-nested-branch.ts`
-- `src/components/ConversationStream.tsx`
-- `src/components/ContextMap.tsx`
+- Skill creator: `/Users/charles/.codex/skills/.system/skill-creator/SKILL.md`
+- Writing skills: `/Users/charles/.codex/superpowers/skills/writing-skills/SKILL.md`
+- Uploaded package: `/Users/charles/Downloads/paper-cover-figure.skill`
+- Final workspace skill: `/Users/charles/Downloads/context_map/paper-cover-figure`
+- Installed skill: `/Users/charles/.codex/skills/paper-cover-figure`
+- Final packaged artifact: `/Users/charles/Downloads/context_map/paper-cover-figure.skill`
 
 ## Visual/Browser Findings
-- None.
+- None yet.
 
 ---
 
-## 2026-03-25 Study Summary Request
+## 2026-03-29 Context Map Node State Clarity
 
-### Early Findings
-- Existing planning files mostly document a separate branch-structure debugging task, not the study narrative itself.
-- The repository contains a dedicated `Study/` folder plus paper sections including `4_Probe_System.tex`, `5_Study_Design.tex`, `6_Findings_and_Result.tex`, and `9_Conclusions.tex`.
-- The active user request is interpretive: explain what study the system enabled, rather than modify code.
+### Research Findings
+- The current Context Map uses overlapping booleans instead of a single visual-state model: `isActive`, `isIncluded`, `isExcluded`, `isSelected`, `isDeleteSelected`, `isSearchMatch`, and `isPlaceholder` all compete for styling in [src/components/ContextMap.tsx](/Users/charles/Downloads/context_map/src/components/ContextMap.tsx).
+- Under the current precedence, explicit include only renders green when `isIncluded && !isActive`, so users can operate the include toggle and still never see green if they mostly touch active-path nodes.
+- Excluded nodes are styled with reduced opacity, dashed red border, and pale red background. In practice this reads as "grayed out" more than "explicitly excluded".
+- Mainline view does still render branches. This happens because Context Map lays out project branch groups independently of the current `base_path`, while `activeNodeIds` only marks the active path subset.
+- The user confusion is therefore structurally valid:
+  - white nodes are visible but not active
+  - blue nodes are active
+  - green is rare enough to appear broken
+  - excluded can look gray instead of clearly red
 
-### Source Review Round 1
-- The paper frames `Mixed-Initiative Context` as the main conceptual contribution: context becomes an explicit, structured, and operable object in human-AI collaboration.
-- `Contextify` is the probe system used to instantiate that concept in a conversational setting; the paper explicitly says the contribution is not a new chat UI by itself.
-- In `Contextify`, each user input and AI output is treated as an addressable node, and users can branch, include/exclude, edit, re-branch, and redefine the mainline path.
-- The context canvas makes structural operations explicit through node selection, state toggling, path restructuring, and pattern extraction.
-- The system also introduces mixed-initiative behavior at the context layer: AI can suggest branching, returning to the mainline, or extracting reusable patterns.
-- `paper/sections/5_Study_Design.tex` is currently empty, so the concrete study procedure must be reconstructed from the `Study/` folder rather than the paper section itself.
-
-### Source Review Round 2
-- The study is explicitly formative and probe-based, not a product benchmark; the baseline is familiar linear chat (e.g. ChatGPT), and the probe is the current system.
-- Design: within-subject, minimal-risk, remote moderated sessions with 6 participants, 45 minutes each, plus screen/audio recording, interviewer notes, and prototype interaction logs.
-- Each participant completes two matched open-ended hardware-concept ideation tasks under counterbalanced tool/task order.
-- The tasks are intentionally open enough to create multiple plausible paths, trade-offs, and topic shifts, so that context organization becomes naturally useful without instructing participants to branch.
-- Data collection focuses on behavior and interpretation: when users separate paths, include/exclude information, revisit earlier threads, accept or resist AI structure suggestions, and how they describe workflow, control, clarity, and cognitive load.
-- `paper/sections/6_Findings_and_Result.tex` is also empty; likely findings must be inferred from planning notes or later paper sections rather than that draft file.
-
-### Source Review Round 3
-- The most accurate one-sentence description is: the system supports a formative probe study of `Mixed-Initiative Context`, comparing a structured context-management prototype with linear chat in order to understand strategy, negotiation, and experience.
-- The study does not primarily ask whether the prototype is faster or better overall; it asks what changes when context becomes a first-class object of interaction.
-- The likely reporting structure is organized by three questions:
-  - how users strategically manage explicit context;
-  - how they understand and negotiate AI initiative in context organization;
-  - how the paradigm changes workflow, control, clarity, and cognitive burden.
-- Several paper section files (`5_Study_Design.tex`, `6_Findings_and_Result.tex`, `7_Design_Implications.tex`, `9_Conclusions.tex`) are still empty, so any description should be grounded in the `Study/` planning docs and working drafts rather than those section files.
-
----
-
-## 2026-03-25 Structure Prompt Study Tuning
-
-### Early Findings
-- The active Branch / return suggestion behavior is defined in `buildStructureSuggestionSystemPrompt()` inside `src/utils/promptBuilders.ts`.
-- The existing prompt already separates guidance into `branch` and `return_parent` sections, each with explicit example bullets, so the safest change is additive.
-- `scripts/test-structure-prompts.ts` already verifies key structure-prompt phrases and is the minimal targeted regression point for these new cases.
-
-### Technical Decision
+### Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Add one new example bullet under `branch` and one under `return_parent` | This satisfies the request to add two cases only, without rewriting existing prompt logic or instructions. |
+| Introduce a dedicated four-state visual helper | State precedence should be explicit and testable outside the JSX class list. |
+| Add scope copy to the map chrome | Users need a direct statement that mainline view can still show non-active branches. |
+| Let explicit include win over active in the visual layer | This makes green observable and surfaces explicit user intent instead of burying it under blue active styling. |
 
----
-*Update this file after every 2 view/browser/search operations*
-*This prevents visual information from being lost*
+### Verification Findings
+- A new targeted regression test failed first with `ERR_MODULE_NOT_FOUND`, then passed after introducing `src/utils/contextMapNodeState.ts`.
+- The existing inclusion-toggle test still passes, so the store behavior was not changed by the UI refactor.
+- TypeScript typecheck passes.
+- Production build passes. Vite still reports the pre-existing large-chunk warning, but no new build error was introduced.
+
+## 2026-03-29 Natural Reset And Invert Semantics
+
+### Research Findings
+- The current store had no way to return a node to natural state once it entered explicit include/exclude. `cycleNodeInclusionState()` only bounced between effective include and effective exclude.
+- `Invert` was not an independent operation. The batch handler simply called `cycleNodeInclusionState()` for each selected node, so its behavior depended on the same hidden toggle path.
+- This made the user complaint accurate: there was no explicit "clear override" action, and invert semantics were hard to reason about.
+
+### Technical Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Add `natural` to batch inclusion actions | Users need a direct way to remove explicit overrides. |
+| Redefine single-node click as `natural <-> opposite override` | Clicking should quickly toggle against the base path and back, not force users through redundant explicit states. |
+| Normalize `include` and `exclude` actions | `include` should only add explicit include when a node is naturally out of context; `exclude` should only add explicit exclude when a node is naturally in context. |
+| Define `invert` in terms of effective context membership | Running invert twice should return the selection to natural state. |
+
+### Verification Findings
+- The updated inclusion test failed first on the second click of an active node, proving the old implementation could not restore natural state.
+- After the store changes, the same test now confirms:
+  - active node click: natural -> exclude -> natural
+  - inactive node click: natural -> include -> natural
+  - batch include/exclude avoid redundant overrides
+  - batch invert twice returns to natural
+
+### Resources
+- [src/store.ts](/Users/charles/Downloads/context_map/src/store.ts)
+- [src/components/shared/ContextMapSelectionActionBar.tsx](/Users/charles/Downloads/context_map/src/components/shared/ContextMapSelectionActionBar.tsx)
+- [scripts/test-node-inclusion-toggle.ts](/Users/charles/Downloads/context_map/scripts/test-node-inclusion-toggle.ts)
+
+### Resources
+- [src/components/ContextMap.tsx](/Users/charles/Downloads/context_map/src/components/ContextMap.tsx)
+- [src/store.ts](/Users/charles/Downloads/context_map/src/store.ts)
+- [src/components/ConversationStream.tsx](/Users/charles/Downloads/context_map/src/components/ConversationStream.tsx)
+- [scripts/test-node-inclusion-toggle.ts](/Users/charles/Downloads/context_map/scripts/test-node-inclusion-toggle.ts)
+- [src/utils/contextMapNodeState.ts](/Users/charles/Downloads/context_map/src/utils/contextMapNodeState.ts)
+- [scripts/test-context-map-node-state.ts](/Users/charles/Downloads/context_map/scripts/test-context-map-node-state.ts)

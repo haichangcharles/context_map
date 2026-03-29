@@ -381,6 +381,22 @@ export const generateMainlineSummary = async (contextNodes: Node[]): Promise<str
   }
 };
 
+export const generateBranchSummary = async (branchNodes: Node[]): Promise<string> => {
+  const messages = mapNodesToMessages(branchNodes);
+
+  try {
+    return await callOpenAICompat(
+      'Summarize this branch conversation in 1-2 very brief sentences (30 words max). ' +
+        'State only: (1) what question or intent motivated this branch, and (2) what key takeaway or conclusion it produced for the parent thread. ' +
+        'Do NOT include intermediate steps, failed attempts, or implementation details.',
+      messages
+    );
+  } catch (error) {
+    console.error('Error generating branch summary:', error);
+    return '';
+  }
+};
+
 export const extractPatternByType = async (
   contextNodes: Node[],
   type: PatternType

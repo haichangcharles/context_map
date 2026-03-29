@@ -2,12 +2,14 @@ type ConversationPromptInput = {
   isMainline: boolean;
   branchAnchorNodeId: string | null;
   mainlineSummary: string;
+  branchSummaries?: string[];
 };
 
 export const buildConversationSystemPrompt = ({
   isMainline,
   branchAnchorNodeId,
   mainlineSummary,
+  branchSummaries,
 }: ConversationPromptInput): string => {
   const sharedBackground =
     'You are assisting in a structured conversational computation. Main Objective: Help the user.\n\n' +
@@ -20,6 +22,11 @@ export const buildConversationSystemPrompt = ({
     '- If the user uses those words in a normal content sense rather than a structural sense, interpret them from the current conversational context.';
 
   if (isMainline) {
+    if (branchSummaries && branchSummaries.length > 0) {
+      return sharedBackground +
+        '\n\n[COMPLETED BRANCH EXPLORATIONS]:\n' +
+        branchSummaries.map((s) => `- ${s}`).join('\n');
+    }
     return sharedBackground;
   }
 

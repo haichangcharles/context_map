@@ -47,6 +47,7 @@ export interface Branch {
   intent_summary?: string;
   parent_context_tldr?: string;
   mainline_summary?: string;
+  branch_summary?: string;
 }
 
 export interface ContextView {
