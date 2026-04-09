@@ -29,6 +29,7 @@
     "test:chat-history-sync": "tsx scripts/test-chat-history-sync.ts",
     "test:example-seed": "tsx scripts/test-example-seed.ts",
     "test:import-tutorial": "tsx scripts/test-import-tutorial.ts",
+    "test:import-career-case": "tsx scripts/test-import-career-case.ts",
     "test:pattern-extraction": "tsx scripts/test-pattern-extraction.ts",
     "test:structure-suggestion": "tsx scripts/test-structure-suggestion.ts",
     "test:gemini-provider": "tsx scripts/test-gemini-provider.ts",

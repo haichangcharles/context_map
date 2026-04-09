@@ -1,4 +1,0 @@
-interface:
-  display_name: "Paper Cover Figure"
-  short_description: "Design HCI teaser figures for papers"
-  default_prompt: "Use $paper-cover-figure to design a teaser figure for my HCI paper."

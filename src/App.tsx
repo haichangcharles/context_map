@@ -43,8 +43,21 @@ export default function App() {
   const [manageAuthError, setManageAuthError] = useState('');
   const [isManageAuthed, setIsManageAuthed] = useState(false);
   const [isTutorialMenuOpen, setIsTutorialMenuOpen] = useState(false);
+  const [isCaseMenuOpen, setIsCaseMenuOpen] = useState(false);
   const importTutorialProject = useAppStore((state) => state.importTutorialProject);
+  const importCareerCaseProject = useAppStore((state) => state.importCareerCaseProject);
   const tutorialMenuRef = useRef<HTMLDivElement>(null);
+  const caseMenuRef = useRef<HTMLDivElement>(null);
+  const careerCaseOptions = [
+    { stage: 'stage1', label: '阶段 1 · 编辑与分叉' },
+    { stage: 'stage2', label: '阶段 2 · 污染与排除' },
+    { stage: 'stage3', label: '阶段 3 · 切线待删除' },
+    { stage: 'stage4', label: '阶段 4 · 主线与 SOP' },
+    { stage: 'stage1', label: 'Stage 1 · Edit + Branching' },
+    { stage: 'stage2', label: 'Stage 2 · Pollution + Exclude' },
+    { stage: 'stage3', label: 'Stage 3 · Tangent Ready to Delete' },
+    { stage: 'stage4', label: 'Stage 4 · PM Mainline + SOP' },
+  ] as const;
 
   const syncPatternsFromRemote = async () => {
     const records = await pullRemotePatterns();
@@ -114,6 +127,17 @@ export default function App() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isTutorialMenuOpen]);
+
+  useEffect(() => {
+    if (!isCaseMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (caseMenuRef.current && !caseMenuRef.current.contains(event.target as Node)) {
+        setIsCaseMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isCaseMenuOpen]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -226,6 +250,11 @@ export default function App() {
     setIsTutorialMenuOpen(false);
   };
 
+  const handleImportCareerCase = (stage: 'stage1' | 'stage2' | 'stage3' | 'stage4', language: 'zh' | 'en') => {
+    importCareerCaseProject(stage, language);
+    setIsCaseMenuOpen(false);
+  };
+
   if (isTutorialRoute) {
     return <TutorialView />;
   }
@@ -297,6 +326,38 @@ export default function App() {
                   >
                     English Tutorial
                   </button>
+                </div>
+              )}
+            </div>
+            <div className="relative" ref={caseMenuRef}>
+              <button
+                onClick={() => setIsCaseMenuOpen((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 rounded border border-zinc-300 px-2 py-1 text-zinc-700 hover:bg-zinc-100"
+                title="Import career case project"
+              >
+                <BookOpen size={13} />
+                <span>Import Case</span>
+                <ChevronDown size={12} />
+              </button>
+              {isCaseMenuOpen && (
+                <div className="absolute left-0 top-full z-50 mt-1 min-w-[18rem] overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10">
+                  {careerCaseOptions.map((option, index) => {
+                    const isChinese = option.label.startsWith('阶段');
+                    const language = isChinese ? 'zh' : 'en';
+                    const showDivider = index === 4;
+                    return (
+                      <button
+                        key={`${option.stage}-${language}`}
+                        onClick={() => handleImportCareerCase(option.stage, language)}
+                        className={clsx(
+                          "flex w-full items-center px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100",
+                          showDivider && "border-t border-zinc-200"
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>

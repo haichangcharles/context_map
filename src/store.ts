@@ -18,6 +18,7 @@ type StructureSnapshot = {
 };
 
 type NodeInclusionAction = 'include' | 'exclude' | 'natural' | 'invert';
+type CareerCaseStage = 'stage1' | 'stage2' | 'stage3' | 'stage4';
 
 interface AppState {
   projects: Record<string, Project>;
@@ -40,6 +41,7 @@ interface AppState {
   // Actions
   createProject: (title: string) => string;
   importTutorialProject: (language?: 'zh' | 'en') => string;
+  importCareerCaseProject: (stage?: CareerCaseStage, language?: 'zh' | 'en') => string;
   setActiveProject: (projectId: string) => void;
   renameProject: (projectId: string, newTitle: string) => void;
   deleteProject: (projectId: string) => void;
@@ -104,6 +106,8 @@ const EXAMPLE_BRANCH_ARCH = 'example-branch-architecture';
 const EXAMPLE_BRANCH_UI = 'example-branch-ui';
 const TUTORIAL_PROJECT_TITLE = 'Tutorial - Learn Context Map';
 const TUTORIAL_PROJECT_TITLE_ZH = '教程 - 学习 Context Map';
+const CAREER_CASE_PROJECT_TITLE = 'Career Transition Case';
+const CAREER_CASE_PROJECT_TITLE_ZH = '职业转型案例';
 
 const shouldSeedExampleData = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -116,13 +120,19 @@ const shouldSeedExampleData = (): boolean => {
   return userId === 'test' || !hasPersistedState;
 };
 
-type TutorialProjectBundle = {
+type PresetProjectBundle = {
   project: Project;
   nodes: Record<string, Node>;
   branches: Record<string, Branch>;
   mainline: string[];
   context: ContextView;
   naturalBranches: Record<string, Branch>;
+  patterns: Record<string, Pattern>;
+  selectionState: {
+    isNodeSelectionMode: boolean;
+    nodeSelectionIntent: SelectionIntent;
+    selectedNodeIds: string[];
+  };
 };
 
 const buildTutorialProjectBundle = (input: {
@@ -131,7 +141,7 @@ const buildTutorialProjectBundle = (input: {
   prefix: string;
   language?: 'zh' | 'en';
   title?: string;
-}): TutorialProjectBundle => {
+}): PresetProjectBundle => {
   const language = input.language ?? 'en';
   const { projectId, contextId, prefix, title = language === 'zh' ? TUTORIAL_PROJECT_TITLE_ZH : TUTORIAL_PROJECT_TITLE } = input;
   const nodeId = (suffix: string) => `${prefix}-${suffix}`;
@@ -365,6 +375,426 @@ const buildTutorialProjectBundle = (input: {
       enabled_patterns_by_type: {},
     },
     naturalBranches: branches,
+    patterns: {},
+    selectionState: {
+      isNodeSelectionMode: false,
+      nodeSelectionIntent: 'batch',
+      selectedNodeIds: [],
+    },
+  };
+};
+
+const buildCareerCaseProjectBundle = (input: {
+  projectId: string;
+  contextId: string;
+  prefix: string;
+  stage?: CareerCaseStage;
+  language?: 'zh' | 'en';
+  title?: string;
+}): PresetProjectBundle => {
+  const language = input.language ?? 'en';
+  const stage = input.stage ?? 'stage1';
+  const resolveTitle = () => {
+    const zhTitles: Record<CareerCaseStage, string> = {
+      stage1: `${CAREER_CASE_PROJECT_TITLE_ZH} · 阶段 1 · 编辑与分叉`,
+      stage2: `${CAREER_CASE_PROJECT_TITLE_ZH} · 阶段 2 · 污染与排除`,
+      stage3: `${CAREER_CASE_PROJECT_TITLE_ZH} · 阶段 3 · 切线待删除`,
+      stage4: `${CAREER_CASE_PROJECT_TITLE_ZH} · 阶段 4 · 主线与 SOP`,
+    };
+    const enTitles: Record<CareerCaseStage, string> = {
+      stage1: `${CAREER_CASE_PROJECT_TITLE} · Stage 1 · Edit + Branching`,
+      stage2: `${CAREER_CASE_PROJECT_TITLE} · Stage 2 · Pollution + Exclude`,
+      stage3: `${CAREER_CASE_PROJECT_TITLE} · Stage 3 · Tangent Ready to Delete`,
+      stage4: `${CAREER_CASE_PROJECT_TITLE} · Stage 4 · PM Mainline + SOP`,
+    };
+    return input.title ?? (language === 'zh' ? zhTitles[stage] : enTitles[stage]);
+  };
+  const { projectId, contextId, prefix } = input;
+  const title = resolveTitle();
+  const nodeId = (suffix: string) => `${prefix}-${suffix}`;
+  const branchId = (suffix: string) => `${prefix}-${suffix}`;
+  const patternId = (suffix: string) => `${prefix}-${suffix}`;
+  const timestamp = (minuteOffset: number) => `2026-03-31T14:${String(minuteOffset).padStart(2, '0')}:00.000Z`;
+
+  const ids = {
+    m1: nodeId('m1'),
+    m2: nodeId('m2'),
+    m3: nodeId('m3'),
+    m4: nodeId('m4'),
+    a1: nodeId('a1'),
+    a2: nodeId('a2'),
+    a3: nodeId('a3'),
+    a4: nodeId('a4'),
+    p1: nodeId('p1'),
+    p2: nodeId('p2'),
+    p3: nodeId('p3'),
+    p4: nodeId('p4'),
+    p5: nodeId('p5'),
+    p6: nodeId('p6'),
+    t1: nodeId('t1'),
+    t2: nodeId('t2'),
+    t3: nodeId('t3'),
+    t4: nodeId('t4'),
+    branchAnalyst: branchId('branch-analyst'),
+    branchPm: branchId('branch-pm'),
+    branchTangent: branchId('branch-pmp'),
+    taskSop: patternId('pattern-task-sop'),
+  };
+
+  const content =
+    language === 'zh'
+      ? {
+          m1: '我在准备跨职能岗位的求职材料。先从 data analyst 面试技巧开始，但我也可能转向 PM。',
+          m2: '已修订的简历摘要：擅长 SQL、实验分析、仪表盘叙事、跨团队沟通与产品判断。虚构的编程技能条目已被删除，只保留已确认经历。',
+          m3: '我越来越觉得 PM 更适合我。先帮我把 analyst 路径和 PM 路径拆开比较。',
+          m4: '这已经是明显的意图偏移。保留 analyst 路径做参考，同时单独开一条 PM 分支，避免两个方向互相污染。',
+          a1: '继续沿着 data analyst 方向帮我准备。',
+          a2: '可以重点练 SQL case、Python web scraping、data cleaning automation，以及 dashboard QA 故事。',
+          a3: '还有哪些偏技术的例子要准备？',
+          a4: '再准备 A/B test design critique、metric definition、ETL debugging，以及 notebook-based analysis walkthrough。',
+          p1: '现在切到 PM 分支。',
+          p2: '好的，我会改成 PM 视角：聚焦 product sense、stakeholder alignment、roadmap trade-offs、prioritization framework，以及跨职能推进。',
+          p3: '但前面的 analyst 历史还在污染回答，总把我拉回 coding 和 data tooling。',
+          p4: '那就把 analyst-heavy 的节点批量排除出当前推理范围。这样 PM 路径就不会再继承技术实现偏好。',
+          p5: '好，继续。帮我整理一版 PM behavioral interview 的 STAR 模板。',
+          p6: 'STAR 模板：Situation 说明背景与业务约束；Task 说明你负责的产品问题；Action 强调调研、对齐、优先级取舍与推动落地；Result 量化影响并说明关键学习。',
+          t1: '临时问题：PMP certification exam registration process 是什么？',
+          t2: '通常要先创建 PMI 账号、确认资格、提交申请、支付费用，再安排考试时间。',
+          t3: '这个要不要在面试前就做？',
+          t4: '它对职业发展有帮助，但对当前 PM interview workflow 不是核心，所以更适合作为临时支线处理。',
+          branchAnalystSummary: '保留原始 data analyst 方向，用来对比，但后续会被移出 PM 推理范围。',
+          branchPmSummary: '转向 PM 的核心路径，强调产品思维而不是技术实现。',
+          branchTangentSummary: '与 PMP 报名相关的临时支线，适合后续删除或移出主任务。',
+          taskSopName: '职业转型面试工作流',
+          taskSopInstruction:
+            '1. 审查简历里是否有虚构或过时表述。 2. 当目标岗位改变时显式切分新路径。 3. 批量排除旧角色带来的上下文污染。 4. 在新主线上生成岗位叙事与面试材料。 5. 提炼 STAR 模板并保存为可复用 SOP。',
+          taskSopExample:
+            '输入：我想从数据分析转向 PM。输出：先修正简历事实，再排除 analyst-heavy 历史，最后生成 STAR 回答模板。',
+        }
+      : {
+          m1: 'I am preparing materials for cross-functional interviews. Start with data analyst techniques, but I may pivot into product management.',
+          m2: 'Edited resume summary: strong in SQL, experimentation, dashboard storytelling, stakeholder communication, and product judgment. The fabricated programming-skill claim has been removed.',
+          m3: 'I am increasingly convinced PM fits me better. Split the analyst path from the PM path so I can compare them cleanly.',
+          m4: 'This is a clear intent shift. Keep the analyst track as a reference path and open a separate PM branch so the two narratives stop contaminating each other.',
+          a1: 'Keep coaching me on the data analyst track.',
+          a2: 'Practice SQL case questions, Python web scraping for messy sources, data cleaning automation, and dashboard QA stories.',
+          a3: 'What other technical examples should I keep ready?',
+          a4: 'Prepare A/B test design critiques, metric definition trade-offs, ETL debugging stories, and notebook-based analysis walkthroughs.',
+          p1: 'Switch me onto the PM branch now.',
+          p2: 'Understood. I will keep the PM path centered on product sense, stakeholder alignment, roadmap trade-offs, prioritization frameworks, and cross-functional leadership.',
+          p3: 'The analyst history is still leaking into the PM answers.',
+          p4: 'Then isolate that baggage. Batch-exclude the analyst-heavy nodes so the PM reasoning scope stops inheriting coding and tooling assumptions.',
+          p5: 'Good. Keep going and draft a STAR response template for PM interviews.',
+          p6: 'STAR template: Situation frames the business context and constraints; Task defines the product problem you owned; Action highlights research, alignment, prioritization, and execution; Result quantifies the impact and the learning.',
+          t1: 'Quick tangent: what is the PMP certification exam registration process?',
+          t2: 'Usually you create a PMI account, confirm eligibility, submit the application, pay the fee, then schedule the exam.',
+          t3: 'Should I do that before interviews?',
+          t4: 'It may help long-term career development, but it is not central to this PM interview workflow, so it works better as a temporary side branch.',
+          branchAnalystSummary: 'Original data-analyst direction kept for comparison, then pushed out of the PM reasoning scope.',
+          branchPmSummary: 'The main PM exploration path centered on product thinking rather than implementation.',
+          branchTangentSummary: 'A temporary PMP-registration tangent that is better handled as a disposable side branch.',
+          taskSopName: 'Career Transition Interview Workflow',
+          taskSopInstruction:
+            '1. Audit the resume for fabricated or stale claims. 2. Split a new path when the target role changes. 3. Batch-exclude history that keeps dragging the model toward the old role. 4. Rebuild the narrative on the new mainline. 5. Generate a STAR template and save the workflow as a reusable SOP.',
+          taskSopExample:
+            'Input: I want to move from analytics into PM. Output: correct the resume facts, exclude analyst-heavy history, then generate PM interview materials and a STAR response template.',
+        };
+
+  const createNode = (
+    id: string,
+    parentId: string | null,
+    role: Role,
+    nodeContent: string,
+    branchIdValue: string | null,
+    minuteOffset: number,
+    metadata: Node['metadata'] = {}
+  ): Node => ({
+    node_id: id,
+    project_id: projectId,
+    parent_id: parentId,
+    role,
+    content: nodeContent,
+    branch_id: branchIdValue,
+    timestamp: timestamp(minuteOffset),
+    metadata: {
+      natural_origin_branch_id: branchIdValue ?? null,
+      ...metadata,
+    },
+  });
+
+  const baseMainlineNodes: Record<string, Node> = {
+    [ids.m1]: createNode(ids.m1, null, 'user', content.m1, null, 0),
+    [ids.m2]: createNode(ids.m2, ids.m1, 'assistant', content.m2, null, 1, {
+      edited_at: timestamp(2),
+    }),
+    [ids.m3]: createNode(ids.m3, ids.m2, 'user', content.m3, null, 3),
+    [ids.m4]: createNode(ids.m4, ids.m3, 'assistant', content.m4, null, 4),
+  };
+
+  const analystNodes: Record<string, Node> = {
+    [ids.a1]: createNode(ids.a1, ids.m4, 'user', content.a1, ids.branchAnalyst, 10),
+    [ids.a2]: createNode(ids.a2, ids.a1, 'assistant', content.a2, ids.branchAnalyst, 11),
+    [ids.a3]: createNode(ids.a3, ids.a2, 'user', content.a3, ids.branchAnalyst, 12),
+    [ids.a4]: createNode(ids.a4, ids.a3, 'assistant', content.a4, ids.branchAnalyst, 13),
+  };
+
+  const pmBranchNodes: Record<string, Node> = {
+    [ids.p1]: createNode(ids.p1, ids.m4, 'user', content.p1, ids.branchPm, 20),
+    [ids.p2]: createNode(ids.p2, ids.p1, 'assistant', content.p2, ids.branchPm, 21),
+    [ids.p3]: createNode(ids.p3, ids.p2, 'user', content.p3, ids.branchPm, 22),
+    [ids.p4]: createNode(ids.p4, ids.p3, 'assistant', content.p4, ids.branchPm, 23),
+    [ids.p5]: createNode(ids.p5, ids.p4, 'user', content.p5, ids.branchPm, 28),
+    [ids.p6]: createNode(ids.p6, ids.p5, 'assistant', content.p6, ids.branchPm, 29),
+  };
+
+  const pmMainlineNodes: Record<string, Node> = {
+    [ids.p1]: createNode(ids.p1, ids.m4, 'user', content.p1, null, 20),
+    [ids.p2]: createNode(ids.p2, ids.p1, 'assistant', content.p2, null, 21),
+    [ids.p3]: createNode(ids.p3, ids.p2, 'user', content.p3, null, 22),
+    [ids.p4]: createNode(ids.p4, ids.p3, 'assistant', content.p4, null, 23),
+    [ids.p5]: createNode(ids.p5, ids.p4, 'user', content.p5, null, 28),
+    [ids.p6]: createNode(ids.p6, ids.p5, 'assistant', content.p6, null, 29),
+  };
+
+  const tangentNodes: Record<string, Node> = {
+    [ids.t1]: createNode(ids.t1, ids.p2, 'user', content.t1, ids.branchTangent, 24),
+    [ids.t2]: createNode(ids.t2, ids.t1, 'assistant', content.t2, ids.branchTangent, 25),
+    [ids.t3]: createNode(ids.t3, ids.t2, 'user', content.t3, ids.branchTangent, 26),
+    [ids.t4]: createNode(ids.t4, ids.t3, 'assistant', content.t4, ids.branchTangent, 27),
+  };
+
+  const stageNodes: Record<CareerCaseStage, Record<string, Node>> = {
+    stage1: {
+      ...baseMainlineNodes,
+      ...analystNodes,
+      ...pmBranchNodes,
+      ...tangentNodes,
+    },
+    stage2: {
+      ...baseMainlineNodes,
+      ...analystNodes,
+      ...pmBranchNodes,
+      ...tangentNodes,
+    },
+    stage3: {
+      ...baseMainlineNodes,
+      ...analystNodes,
+      ...pmBranchNodes,
+      ...tangentNodes,
+    },
+    stage4: {
+      ...baseMainlineNodes,
+      ...analystNodes,
+      ...pmMainlineNodes,
+      ...tangentNodes,
+    },
+  };
+
+  const stageBranches: Record<CareerCaseStage, Record<string, Branch>> = {
+    stage1: {
+      [ids.branchAnalyst]: {
+        branch_id: ids.branchAnalyst,
+        project_id: projectId,
+        anchor_node_id: ids.m4,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchAnalystSummary,
+      },
+      [ids.branchPm]: {
+        branch_id: ids.branchPm,
+        project_id: projectId,
+        anchor_node_id: ids.m4,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchPmSummary,
+      },
+      [ids.branchTangent]: {
+        branch_id: ids.branchTangent,
+        project_id: projectId,
+        anchor_node_id: ids.p2,
+        parent_branch_id: ids.branchPm,
+        status: 'active',
+        intent_summary: content.branchTangentSummary,
+      },
+    },
+    stage2: {
+      [ids.branchAnalyst]: {
+        branch_id: ids.branchAnalyst,
+        project_id: projectId,
+        anchor_node_id: ids.m4,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchAnalystSummary,
+      },
+      [ids.branchPm]: {
+        branch_id: ids.branchPm,
+        project_id: projectId,
+        anchor_node_id: ids.m4,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchPmSummary,
+      },
+      [ids.branchTangent]: {
+        branch_id: ids.branchTangent,
+        project_id: projectId,
+        anchor_node_id: ids.p2,
+        parent_branch_id: ids.branchPm,
+        status: 'active',
+        intent_summary: content.branchTangentSummary,
+      },
+    },
+    stage3: {
+      [ids.branchAnalyst]: {
+        branch_id: ids.branchAnalyst,
+        project_id: projectId,
+        anchor_node_id: ids.m4,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchAnalystSummary,
+      },
+      [ids.branchPm]: {
+        branch_id: ids.branchPm,
+        project_id: projectId,
+        anchor_node_id: ids.m4,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchPmSummary,
+      },
+      [ids.branchTangent]: {
+        branch_id: ids.branchTangent,
+        project_id: projectId,
+        anchor_node_id: ids.p2,
+        parent_branch_id: ids.branchPm,
+        status: 'active',
+        intent_summary: content.branchTangentSummary,
+      },
+    },
+    stage4: {
+      [ids.branchAnalyst]: {
+        branch_id: ids.branchAnalyst,
+        project_id: projectId,
+        anchor_node_id: ids.m4,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchAnalystSummary,
+      },
+      [ids.branchTangent]: {
+        branch_id: ids.branchTangent,
+        project_id: projectId,
+        anchor_node_id: ids.p2,
+        parent_branch_id: null,
+        status: 'active',
+        intent_summary: content.branchTangentSummary,
+      },
+    },
+  };
+
+  const stageMainlines: Record<CareerCaseStage, string[]> = {
+    stage1: [ids.m1, ids.m2, ids.m3, ids.m4],
+    stage2: [ids.m1, ids.m2, ids.m3, ids.m4],
+    stage3: [ids.m1, ids.m2, ids.m3, ids.m4],
+    stage4: [ids.m1, ids.m2, ids.m3, ids.m4, ids.p1, ids.p2, ids.p3, ids.p4, ids.p5, ids.p6],
+  };
+
+  const stageContexts: Record<CareerCaseStage, ContextView> = {
+    stage1: {
+      context_id: contextId,
+      project_id: projectId,
+      base_path: ids.branchPm,
+      included_nodes: [],
+      excluded_nodes: [],
+      enabled_patterns_by_type: {},
+    },
+    stage2: {
+      context_id: contextId,
+      project_id: projectId,
+      base_path: ids.branchPm,
+      included_nodes: [],
+      excluded_nodes: [],
+      enabled_patterns_by_type: {},
+    },
+    stage3: {
+      context_id: contextId,
+      project_id: projectId,
+      base_path: ids.branchPm,
+      included_nodes: [],
+      excluded_nodes: [ids.a1, ids.a2, ids.a3, ids.a4],
+      enabled_patterns_by_type: {},
+    },
+    stage4: {
+      context_id: contextId,
+      project_id: projectId,
+      base_path: 'mainline',
+      included_nodes: [],
+      excluded_nodes: [ids.a1, ids.a2, ids.a3, ids.a4],
+      enabled_patterns_by_type: {
+        task_sop: ids.taskSop,
+      },
+    },
+  };
+
+  const stagePatterns: Record<CareerCaseStage, Record<string, Pattern>> = {
+    stage1: {},
+    stage2: {},
+    stage3: {},
+    stage4: {
+      [ids.taskSop]: {
+        pattern_id: ids.taskSop,
+        type: 'task_sop',
+        name: content.taskSopName,
+        requires_human_review: false,
+        instruction: content.taskSopInstruction,
+        example: content.taskSopExample,
+        review_status: 'approved',
+        source_line: {
+          from: ids.m1,
+          to: ids.p6,
+        },
+        created_at: timestamp(30),
+        updated_at: timestamp(30),
+        created_from_project_id: projectId,
+      },
+    },
+  };
+
+  const selectionStateByStage: Record<CareerCaseStage, PresetProjectBundle['selectionState']> = {
+    stage1: {
+      isNodeSelectionMode: false,
+      nodeSelectionIntent: 'batch',
+      selectedNodeIds: [],
+    },
+    stage2: {
+      isNodeSelectionMode: true,
+      nodeSelectionIntent: 'batch',
+      selectedNodeIds: [ids.a1, ids.a2, ids.a3, ids.a4],
+    },
+    stage3: {
+      isNodeSelectionMode: true,
+      nodeSelectionIntent: 'delete',
+      selectedNodeIds: [ids.t1, ids.t2, ids.t3, ids.t4],
+    },
+    stage4: {
+      isNodeSelectionMode: false,
+      nodeSelectionIntent: 'batch',
+      selectedNodeIds: [],
+    },
+  };
+
+  return {
+    project: {
+      project_id: projectId,
+      title,
+      root_node_id: ids.m1,
+      mainline_id: `mainline_${projectId}`,
+      active_context_id: contextId,
+    },
+    nodes: stageNodes[stage],
+    branches: stageBranches[stage],
+    mainline: stageMainlines[stage],
+    context: stageContexts[stage],
+    naturalBranches: stageBranches[stage],
+    patterns: stagePatterns[stage],
+    selectionState: selectionStateByStage[stage],
   };
 };
 
@@ -1150,7 +1580,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
         [EXAMPLE_CONTEXT_ID]: exampleBundle.context,
       }
     : {},
-  patterns: {},
+  patterns: seedExampleData ? exampleBundle.patterns : {},
   pastStructureSnapshots: [],
   futureStructureSnapshots: [],
   naturalMainlines: seedExampleData
@@ -1160,9 +1590,9 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     : {},
   naturalBranches: seedExampleData ? exampleBundle.naturalBranches : {},
   deletedNodeIds: [],
-  isNodeSelectionMode: false,
-  nodeSelectionIntent: 'batch',
-  selectedNodeIds: [],
+  isNodeSelectionMode: seedExampleData ? exampleBundle.selectionState.isNodeSelectionMode : false,
+  nodeSelectionIntent: seedExampleData ? exampleBundle.selectionState.nodeSelectionIntent : 'batch',
+  selectedNodeIds: seedExampleData ? exampleBundle.selectionState.selectedNodeIds : [],
   activeProjectId: seedExampleData ? EXAMPLE_PROJECT_ID : null,
 
   createProject: (title) => {
@@ -1214,8 +1644,42 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       branches: { ...state.branches, ...bundle.branches },
       mainlines: { ...state.mainlines, [projectId]: bundle.mainline },
       contexts: { ...state.contexts, [contextId]: bundle.context },
+      patterns: { ...state.patterns, ...bundle.patterns },
       naturalMainlines: { ...state.naturalMainlines, [projectId]: bundle.mainline },
       naturalBranches: { ...state.naturalBranches, ...bundle.naturalBranches },
+      isNodeSelectionMode: bundle.selectionState.isNodeSelectionMode,
+      nodeSelectionIntent: bundle.selectionState.nodeSelectionIntent,
+      selectedNodeIds: bundle.selectionState.selectedNodeIds,
+      activeProjectId: projectId,
+    }));
+
+    return projectId;
+  },
+
+  importCareerCaseProject: (stage = 'stage1', language = 'en') => {
+    const projectId = uuidv4();
+    const contextId = uuidv4();
+    const prefix = `career-case-${projectId.slice(0, 8)}`;
+    const bundle = buildCareerCaseProjectBundle({
+      projectId,
+      contextId,
+      prefix,
+      stage,
+      language,
+    });
+
+    set((state) => ({
+      projects: { ...state.projects, [projectId]: bundle.project },
+      nodes: { ...state.nodes, ...bundle.nodes },
+      branches: { ...state.branches, ...bundle.branches },
+      mainlines: { ...state.mainlines, [projectId]: bundle.mainline },
+      contexts: { ...state.contexts, [contextId]: bundle.context },
+      patterns: { ...state.patterns, ...bundle.patterns },
+      naturalMainlines: { ...state.naturalMainlines, [projectId]: bundle.mainline },
+      naturalBranches: { ...state.naturalBranches, ...bundle.naturalBranches },
+      isNodeSelectionMode: bundle.selectionState.isNodeSelectionMode,
+      nodeSelectionIntent: bundle.selectionState.nodeSelectionIntent,
+      selectedNodeIds: bundle.selectionState.selectedNodeIds,
       activeProjectId: projectId,
     }));
 
