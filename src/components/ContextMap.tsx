@@ -2006,28 +2006,28 @@ export default function ContextMap() {
         )}
 
         {/* Bottom Layout Mode Bar */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/55 backdrop-blur-xl border border-white/70 rounded-full shadow-[0_10px_30px_rgba(0,0,0,0.16)] p-1.5 flex items-center gap-1 z-20">
+        <div className="absolute bottom-4 left-1/2 z-20 flex min-h-7 -translate-x-1/2 items-center gap-0.5 rounded-full border border-white/80 bg-white/58 p-0.5 shadow-[0_8px_20px_rgba(15,23,42,0.12)] backdrop-blur-xl">
           <button
               onClick={() => setLayoutMode('timeline')}
               className={clsx(
-                "text-xs px-3 py-1.5 rounded-full transition-colors",
+                "rounded-full px-1.5 py-0.5 text-[9px] font-normal leading-none tracking-[-0.01em] transition-all duration-150",
                 layoutMode === 'timeline'
-                  ? "bg-zinc-200/85 text-zinc-900 shadow-sm"
-                  : "bg-transparent text-zinc-700 hover:bg-white/50"
+                  ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                  : "bg-transparent text-zinc-500 hover:text-zinc-700"
               )}
             >
-              Thread
+              Compact
             </button>
           <button
               onClick={() => setLayoutMode('tree')}
               className={clsx(
-                "text-xs px-3 py-1.5 rounded-full transition-colors",
+                "rounded-full px-1.5 py-0.5 text-[9px] font-normal leading-none tracking-[-0.01em] transition-all duration-150",
                 layoutMode === 'tree'
-                  ? "bg-zinc-200/85 text-zinc-900 shadow-sm"
-                  : "bg-transparent text-zinc-700 hover:bg-white/50"
+                  ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                  : "bg-transparent text-zinc-500 hover:text-zinc-700"
               )}
             >
-              Canvas
+              Loose
           </button>
         </div>
         
