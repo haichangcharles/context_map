@@ -108,12 +108,56 @@ React 19 · TypeScript · Vite · Zustand · `@xyflow/react` + Dagre · Tailwind
 
 ---
 
+## Data Model (ER Diagram)
+
+```mermaid
+erDiagram
+    CHAT_HISTORY {
+        text message_id PK
+        text user_id
+        text project_id
+        text parent_id
+        text branch_id
+    }
+
+    PATTERNS {
+        text pattern_id PK
+        text user_id
+        text source_from_node_id
+        text source_to_node_id
+        text created_from_project_id
+    }
+
+    BRANCH_FEEDBACK {
+        text sample_id PK
+        text user_id
+    }
+
+    STRUCTURE_SUGGESTION_FEEDBACK {
+        text event_id PK
+        text suggestion_id
+        text user_id
+        text project_id
+        text target_node_id
+    }
+
+    CHAT_HISTORY ||--o{ CHAT_HISTORY : "parent_id -> message_id"
+    CHAT_HISTORY ||--o{ PATTERNS : "source_from_node_id/source_to_node_id -> message_id"
+    CHAT_HISTORY ||--o{ STRUCTURE_SUGGESTION_FEEDBACK : "target_node_id -> message_id"
+    CHAT_HISTORY ||--o{ BRANCH_FEEDBACK : "user_id (logical)"
+```
+
+Full rigorous version (constraints, indexes, and FK hardening recommendations): [`docs/erd.md`](./docs/erd.md)
+
+---
+
 ## Documentation
 
 | Doc | Purpose |
 |-----|---------|
 | [docs/deployment.md](./docs/deployment.md) | Env vars, providers, Vercel, `vercel dev` |
 | [docs/supabase.md](./docs/supabase.md) | Optional Supabase tables for sync / study logging |
+| [docs/erd.md](./docs/erd.md) | Full ERD, keys, logical relations, and FK hardening recommendations |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | How to contribute |
 | [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Community expectations |
 | [SECURITY.md](./SECURITY.md) | Reporting security issues |
