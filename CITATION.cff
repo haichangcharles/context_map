@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+title: "Contextify"
+message: "If you use this project or its core concept, please cite the paper below."
+type: software
+authors:
+  - family-names: "Li"
+    given-names: "Haichang"
+  - family-names: "Zhang"
+    given-names: "Qinshi"
+  - family-names: "Wang"
+    given-names: "Piaohong"
+  - family-names: "Lu"
+    given-names: "Zhicong"
+preferred-citation:
+  type: article
+  title: "Mixed-Initiative Context: Structuring and Managing Context for Human-AI Collaboration"
+  authors:
+    - family-names: "Li"
+      given-names: "Haichang"
+    - family-names: "Zhang"
+      given-names: "Qinshi"
+    - family-names: "Wang"
+      given-names: "Piaohong"
+    - family-names: "Lu"
+      given-names: "Zhicong"
+  journal: "arXiv preprint arXiv:2604.07121"
+  year: 2026
+  url: "https://arxiv.org/abs/2604.07121"

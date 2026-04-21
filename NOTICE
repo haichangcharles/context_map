@@ -1,0 +1,12 @@
+Contextify
+Copyright (c) 2026 Contextify Authors
+
+This project is released under the Apache License 2.0.
+See LICENSE for full license text.
+
+Attribution Notice:
+- This repository and its core interaction concept are introduced as:
+  "Mixed-Initiative Context: Structuring and Managing Context for Human-AI Collaboration"
+  (Li, Zhang, Wang, Lu; arXiv:2604.07121).
+- If you redistribute derivative works, keep this NOTICE file as required by Apache-2.0.
+- If you use this project or concept in academic outputs, please cite the paper listed above.

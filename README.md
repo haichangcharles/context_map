@@ -36,15 +36,21 @@ Also indexed on alphaXiv: [overview](https://www.alphaxiv.org/overview/2604.0712
 
 ---
 
-## Concept and System Figures
+## Paper Introduction with Figures
 
-### Mixed-Initiative Context Concept
+The paper-level motivation is that multi-turn context is often flattened into one chronological stream, while real collaboration contains branching, temporary paths, and shifting intent.
+
+### Figure A: Mixed-Initiative Context concept
 
 ![Mixed-Initiative Context concept figure](./asset/figs/mic.png)
 
-### Contextify UI Overview
+This concept figure introduces the shift from implicit context handling to explicit context structuring and management, with mixed initiative between human and AI.
+
+### Figure B: Contextify system UI
 
 ![Contextify UI overview](./asset/figs/UI.png)
+
+This UI figure shows the system instantiation of the concept: conversational interaction and Context Map are synchronized, so users can directly operate on context units/structure while AI provides structure-level suggestions.
 
 For full details, see the paper: [arXiv:2604.07121](https://arxiv.org/abs/2604.07121).
 
@@ -191,6 +197,11 @@ If Contextify or the Mixed-Initiative Context idea helps your work, please cite:
 }
 ```
 
+Attribution and citation policy:
+
+- Keep `NOTICE` in redistributions and derivative works (Apache-2.0 notice flow).
+- For academic/research use of this project or concept, cite the paper above.
+
 ---
 
 ## Contribute
@@ -201,4 +212,4 @@ Issues and PRs are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-[Apache-2.0](./LICENSE).
+[Apache-2.0](./LICENSE). See also [NOTICE](./NOTICE) and [CITATION.cff](./CITATION.cff).
