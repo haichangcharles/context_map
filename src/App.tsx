@@ -425,7 +425,8 @@ export default function App() {
               {/* Toggle Context Map Button */}
               <button
                 onClick={() => setIsContextMapOpen(!isContextMapOpen)}
-                className="absolute top-4 right-4 p-2 bg-white border border-zinc-200 rounded-md shadow-sm hover:bg-zinc-50 z-10"
+                style={{ transform: 'translateY(42px)' }}
+                className="absolute right-4 top-4 p-2 bg-white border border-zinc-200 rounded-md shadow-sm hover:bg-zinc-50 z-10"
                 title={isContextMapOpen ? "Hide Context Map" : "Show Context Map"}
               >
                 {isContextMapOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}

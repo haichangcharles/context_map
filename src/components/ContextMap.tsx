@@ -436,7 +436,7 @@ export default function ContextMap() {
   
   const [flowNodes, setFlowNodes] = useNodesState([]);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState([]);
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>('timeline');
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('tree');
   const [layoutRefreshToken, setLayoutRefreshToken] = useState(0);
   
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
@@ -767,7 +767,6 @@ export default function ContextMap() {
     setSearchQuery(nextQuery);
     setSearchResultIds(matches);
     setActiveSearchResultIndex(matches.length > 0 ? 0 : -1);
-    setIsSearchPanelOpen(false);
   }, [clearSearch, renderNodes, renderProject, searchInput]);
 
   const stepSearchResult = useCallback((direction: 'next' | 'prev') => {
@@ -2006,13 +2005,14 @@ export default function ContextMap() {
         )}
 
         {/* Bottom Layout Mode Bar */}
-        <div className="absolute bottom-4 left-1/2 z-20 flex min-h-7 -translate-x-1/2 items-center gap-0.5 rounded-full border border-white/80 bg-white/58 p-0.5 shadow-[0_8px_20px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+        <div className="absolute bottom-4 left-1/2 z-20 flex min-h-8 -translate-x-1/2 items-center gap-0.5 rounded-full border border-white/85 bg-white/68 p-1 shadow-[0_8px_18px_rgba(15,23,42,0.12)] backdrop-blur-xl">
           <button
               onClick={() => setLayoutMode('timeline')}
+              style={{ fontSize: '12px', lineHeight: 1 }}
               className={clsx(
-                "rounded-full px-1.5 py-0.5 text-[9px] font-normal leading-none tracking-[-0.01em] transition-all duration-150",
+                "rounded-full px-2.5 py-1 font-medium leading-none tracking-[0.01em] transition-all duration-150",
                 layoutMode === 'timeline'
-                  ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                  ? "bg-white text-zinc-900 shadow-[0_2px_5px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]"
                   : "bg-transparent text-zinc-500 hover:text-zinc-700"
               )}
             >
@@ -2020,10 +2020,11 @@ export default function ContextMap() {
             </button>
           <button
               onClick={() => setLayoutMode('tree')}
+              style={{ fontSize: '12px', lineHeight: 1 }}
               className={clsx(
-                "rounded-full px-1.5 py-0.5 text-[9px] font-normal leading-none tracking-[-0.01em] transition-all duration-150",
+                "rounded-full px-2.5 py-1 font-medium leading-none tracking-[0.01em] transition-all duration-150",
                 layoutMode === 'tree'
-                  ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                  ? "bg-white text-zinc-900 shadow-[0_2px_5px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]"
                   : "bg-transparent text-zinc-500 hover:text-zinc-700"
               )}
             >
