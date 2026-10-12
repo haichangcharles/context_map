@@ -33,7 +33,11 @@ export type ContextPlanEditEvent = {
 export const readContextPlanEdits = (storage: Pick<Storage, 'getItem'>, userId: string): ContextPlanEditEvent[] => {
   try {
     const byUser = JSON.parse(storage.getItem(STORAGE_KEY) || '{}') as Record<string, ContextPlanEditEvent[]>;
-    return Array.isArray(byUser[userId]) ? byUser[userId].slice(-MAX_EVENTS_PER_USER) : [];
+    return Array.isArray(byUser[userId]) ? byUser[userId]
+      .filter((event) => event && typeof event.action === 'string'
+        && Array.isArray(event.before?.included_nodes) && Array.isArray(event.before?.excluded_nodes)
+        && Array.isArray(event.after?.included_nodes) && Array.isArray(event.after?.excluded_nodes))
+      .slice(-MAX_EVENTS_PER_USER) : [];
   } catch { return []; }
 };
 

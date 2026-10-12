@@ -9,7 +9,7 @@ export const readContextChoices = (storage: Pick<Storage, 'getItem'>): ContextCh
     const data = JSON.parse(storage.getItem(CHOICE_KEY) || '{}') as Record<string, Record<string, ContextChoice[]>>;
     return Object.values(data[userId] || {})
       .flatMap((choices) => Array.isArray(choices) ? choices : [])
-      .filter((choice): choice is ContextChoice => Boolean(choice && typeof choice.query === 'string' && (choice.decision === 'accepted' || choice.decision === 'rejected')))
+      .filter((choice): choice is ContextChoice => Boolean(choice && typeof choice.query === 'string' && typeof choice.branchId === 'string' && typeof choice.at === 'string' && (choice.decision === 'accepted' || choice.decision === 'rejected')))
       .sort((a, b) => a.at.localeCompare(b.at))
       .slice(-30);
   } catch { return []; }
