@@ -599,8 +599,8 @@ export default function ConversationStream() {
   }, [pendingBranchSuggestion, activeInlineSuggestionIndex, visibleNodes.length, context?.base_path]);
 
   const contextGraph = useMemo(
-    () => project ? buildContextGraph(project.project_id, nodes, branches) : null,
-    [project?.project_id, nodes, branches]
+    () => !isLoading && project ? buildContextGraph(project.project_id, nodes, branches) : null,
+    [isLoading, project?.project_id, nodes, branches]
   );
   const compiledTurnContext = context && contextGraph
     ? compileTurnContext({ graph: contextGraph, context, visibleNodeIds: visibleNodes.map((node) => node.node_id) })
