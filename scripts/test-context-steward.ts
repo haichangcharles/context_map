@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { Branch, ContextView, Node } from '../src/types';
-import { buildContextGraph, compileTurnContext, learnContextPreference, proposeContextReturns, reviewContextProposal } from '../src/domain/contextSteward';
+import { buildContextGraph, compileTurnContext, learnContextPreference, proposeContextReturns, reviewContextProposal, selectStructureReadSet } from '../src/domain/contextSteward';
 
 const node = (id: string, content: string, branchId: string | null, time: number): Node => ({
   node_id: id, project_id: 'writing', parent_id: time ? `n${time - 1}` : null,
@@ -28,6 +28,7 @@ assert.deepEqual(recalled.nodes.map((item) => item.node_id), ['n0', 'n2', 'n4'],
 assert.equal(recalled.sources.n2, 'explicit_include');
 const excluded = compileTurnContext({ graph, context: { ...context, included_nodes: ['n2'], excluded_nodes: ['n2'] }, visibleNodeIds: ['n0', 'n4'] });
 assert.deepEqual(excluded.nodes.map((item) => item.node_id), ['n0', 'n4'], 'explicit exclude must take priority even if stale state contains the same include');
+assert.deepEqual(selectStructureReadSet(recalled.nodes, ['n2'], 1).map((item) => item.node_id), ['n2', 'n4'], 'structure triage should keep explicit old-branch evidence under a short budget');
 
 const query = 'Write the article section using the interview evidence about human agency';
 const first = proposeContextReturns({ graph, context, query, activeNodeIds: ['n0', 'n4'] });

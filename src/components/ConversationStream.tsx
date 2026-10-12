@@ -15,7 +15,7 @@ import {
 import { buildInlineSuggestions, clampInlineSuggestionIndex } from '../utils/inlineSuggestions';
 import { createChildTimestampAfter } from '../utils/messageTimestamp';
 import { buildConversationSystemPrompt } from '../utils/promptBuilders';
-import { buildContextGraph, compileTurnContext, proposeContextReturns, reviewContextProposal } from '../domain/contextSteward';
+import { buildContextGraph, compileTurnContext, proposeContextReturns, reviewContextProposal, selectStructureReadSet } from '../domain/contextSteward';
 import { readContextChoices, recordContextChoice } from '../services/contextPreferenceStore';
 import {
   DEFAULT_SCROLL_FOLLOW_THRESHOLD_PX,
@@ -957,7 +957,7 @@ export default function ConversationStream() {
 
     const structureDetectionPromise =
       shouldDetectBranch && parentId
-        ? detectStructureSuggestion(liveVisibleNodes, userMsg, {
+        ? detectStructureSuggestion(selectStructureReadSet(allEffectiveNodes, liveContext?.included_nodes), userMsg, {
             currentMode: liveIsMainline ? 'mainline' : 'branch',
             branchDepth: liveBranchDepth,
             currentBranchIntent,

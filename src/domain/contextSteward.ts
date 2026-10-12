@@ -75,6 +75,15 @@ export type CompiledTurnContext = {
   excludedNodeIds: string[];
 };
 
+/** The structure agent reads a bounded tail plus user-pinned context. */
+export const selectStructureReadSet = (nodes: Node[], pinnedNodeIds: string[] = [], recentLimit = 24): Node[] => {
+  const keep = new Set([...nodes.slice(-recentLimit).map((node) => node.node_id), ...pinnedNodeIds]);
+  return nodes.filter((node) => keep.has(node.node_id)).map((node) => ({
+    ...node,
+    content: node.content.length > 800 ? `${node.content.slice(0, 800)}\n[truncated for structure decision]` : node.content,
+  }));
+};
+
 /** One deterministic boundary between the visible graph and the model request. */
 export const compileTurnContext = (input: {
   graph: ContextGraph;
