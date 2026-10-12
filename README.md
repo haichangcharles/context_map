@@ -74,8 +74,7 @@ For full details, see the paper: [arXiv:2604.07121](https://arxiv.org/abs/2604.0
 
 ```bash
 npm install
-cp .env.example .env.local
-# Edit .env.local: set at least OPENAI_API_KEY
+# Export SILICONFLOW_API_KEY in your shell (server-side only).
 npm run dev
 ```
 
@@ -93,6 +92,7 @@ npm run build          # production build
 npm run preview       # preview build
 npm run lint          # TypeScript check
 npm run test:mainline # mainline / structure regression script
+npm run test:context-steward # graph, context compiler, preference policy
 ```
 
 ---
@@ -102,6 +102,9 @@ npm run test:mainline # mainline / structure regression script
 - **Projects** + **Conversation Stream** + **Context Map** stay in sync
 - **Branch / Re-Branch / Promote**, custom mainline start/end
 - **Context controls:** per-node include/exclude and batch operations
+- **Cross-turn context stewardship:** retrieve relevant material from an earlier branch, review the exact messages, and include them in the next turn
+- **Deterministic context compiler:** active path plus explicit includes minus explicit excludes; records the selected node IDs for each sent turn
+- **Local preference learning:** accepted/rejected suggestions and manual plan edits adjust future retrieval sensitivity per user
 - **Structure governance:** Undo / Redo, Reset to Natural
 - **Layouts:** Canvas / Map / Thread
 - **AI:** streaming chat, branch summary, pattern / SOP extraction fields (`name` / guidance / steps)
@@ -111,6 +114,8 @@ npm run test:mainline # mainline / structure regression script
 ## Stack
 
 React 19 · TypeScript · Vite · Zustand · `@xyflow/react` + Dagre · Tailwind CSS 4 · OpenAI-compatible chat API (see `.env.example`)
+
+The context graph, compiler, and suggestion policy are pure domain functions in `src/domain/`. Local evidence storage is in `src/services/`; the chat and map remain presentation surfaces. See [technical architecture](./docs/technical-architecture.md) for the actual turn flow and current integration boundary.
 
 ---
 
@@ -162,6 +167,7 @@ Full rigorous version (constraints, indexes, and FK hardening recommendations): 
 | Doc | Purpose |
 |-----|---------|
 | [docs/deployment.md](./docs/deployment.md) | Env vars, providers, Vercel, `vercel dev` |
+| [docs/technical-architecture.md](./docs/technical-architecture.md) | Graph, context compiler, stewardship, evidence, and runtime boundary |
 | [docs/supabase.md](./docs/supabase.md) | Optional Supabase tables for sync / study logging |
 | [docs/erd.md](./docs/erd.md) | Full ERD, keys, logical relations, and FK hardening recommendations |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | How to contribute |
@@ -173,12 +179,12 @@ Full rigorous version (constraints, indexes, and FK hardening recommendations): 
 
 ## Status & roadmap
 
-**Today:** MVP loop is usable end-to-end (mainline/branches, context controls, rollback, pattern extraction). Regression script: `scripts/test-mainline-endpoints.ts`.
+**Today:** the standalone chat app supports mainline/branches, explicit context plans, a reviewable cross-branch context steward, per-turn plan records, and preference feedback. The model-backed structure suggestion remains a server-side model call; the [DeepSeek Harness Contextify implementation](https://github.com/haichangcharles/dsh-context-map) is the companion agent-runtime project and is not yet connected to this standalone UI.
 
 **On the roadmap (non-exhaustive):**
 
 - Multi-user collaboration, richer persistence, observability, enterprise-style deployment
-- **Continual learning:** turn accept/reject (and related) structure-level signals into training supervision
+- **Continual learning:** extend the local accept/reject and plan-edit evidence with cross-device sync and offline model training
 - **Inference integration:** explore wiring the Context Map with **KV cache**-aware serving
 - **OpenCode:** explore porting this interaction model into **OpenCode**-style coding workflows
 

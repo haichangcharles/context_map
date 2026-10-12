@@ -65,9 +65,8 @@ const run = async () => {
       currentBranchIntent: 'Launch recommendation memo',
     });
 
-    assert.equal(capturedHeaders['x-model-provider'], 'gemini');
-    assert.equal(capturedBody.response_format.type, 'json_schema');
-    assert.equal(capturedBody.response_format.json_schema.type, 'object');
+    assert.equal(capturedHeaders['x-model-provider'], 'siliconflow');
+    assert.equal(capturedBody.response_format, undefined, 'structure suggestions should use the selected V3-compatible JSON prompt');
     assert.equal(decision.primaryAction, 'branch');
     assert.equal(decision.assetAction, 'extract_task_sop');
     assert.equal(decision.showSuggestion, true);

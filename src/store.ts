@@ -5,6 +5,7 @@ import { Project, Node, Branch, ContextView, Pattern, PatternType, Role, DeleteS
 import { logDeletedChatNodes, mergeRecoveredChatState, syncProjectRename, type RecoveredChatState } from './services/chatHistory';
 import { logPatternDelete, logPatternUpsert, mergeRemotePatternsIntoPatterns, type PatternSyncRecord } from './services/patternSync';
 import { reconcileSelectedNodeIds, resolveNodeSelectionClick } from './utils/selectionState';
+import { logContextPlanEdit } from './utils/contextPlanEditLog';
 
 type StructureSnapshot = {
   projects: Record<string, Project>;
@@ -1835,6 +1836,9 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
 
   createBranch: (projectId, anchorNodeId) => {
     const branchId = uuidv4();
+    const beforeState = get();
+    const beforeProject = beforeState.projects[projectId];
+    const before = beforeProject ? beforeState.contexts[beforeProject.active_context_id] : undefined;
 
     set((state) => {
       const project = state.projects[projectId];
@@ -1871,6 +1875,16 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       };
     });
 
+    const afterState = get();
+    const afterProject = afterState.projects[projectId];
+    logContextPlanEdit({
+      projectId,
+      before,
+      after: afterProject ? afterState.contexts[afterProject.active_context_id] : undefined,
+      touchedNodeIds: [anchorNodeId],
+      action: 'branch_open_manual',
+    });
+
     return branchId;
   },
 
@@ -1878,6 +1892,9 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
     if (!nodeIdsToMove.length) return null;
 
     const branchId = uuidv4();
+    const beforeState = get();
+    const beforeProject = beforeState.projects[projectId];
+    const before = beforeProject ? beforeState.contexts[beforeProject.active_context_id] : undefined;
 
     let movedCount = 0;
     let rejectedBecauseStale = false;
@@ -2032,6 +2049,15 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
       return null;
     }
     if (movedCount === 0) return null;
+    const afterState = get();
+    const afterProject = afterState.projects[projectId];
+    logContextPlanEdit({
+      projectId,
+      before,
+      after: afterProject ? afterState.contexts[afterProject.active_context_id] : undefined,
+      touchedNodeIds: [anchorNodeId, ...nodeIdsToMove],
+      action: 'branch_open_accept',
+    });
     return branchId;
   },
 
@@ -2116,6 +2142,9 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   },
 
   returnToMainline: (projectId) => {
+    const beforeState = get();
+    const beforeProject = beforeState.projects[projectId];
+    const before = beforeProject ? beforeState.contexts[beforeProject.active_context_id] : undefined;
     set((state) => {
       const project = state.projects[projectId];
       const context = state.contexts[project.active_context_id];
@@ -2129,9 +2158,21 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
         contexts: { ...state.contexts, [context.context_id]: updatedContext },
       };
     });
+    const afterState = get();
+    const afterProject = afterState.projects[projectId];
+    logContextPlanEdit({
+      projectId,
+      before,
+      after: afterProject ? afterState.contexts[afterProject.active_context_id] : undefined,
+      touchedNodeIds: [],
+      action: 'route_return_mainline',
+    });
   },
 
   returnToParentBranch: (projectId) => {
+    const beforeState = get();
+    const beforeProject = beforeState.projects[projectId];
+    const before = beforeProject ? beforeState.contexts[beforeProject.active_context_id] : undefined;
     set((state) => {
       const project = state.projects[projectId];
       if (!project) return state;
@@ -2151,9 +2192,21 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
         },
       };
     });
+    const afterState = get();
+    const afterProject = afterState.projects[projectId];
+    logContextPlanEdit({
+      projectId,
+      before,
+      after: afterProject ? afterState.contexts[afterProject.active_context_id] : undefined,
+      touchedNodeIds: [],
+      action: 'route_return_parent',
+    });
   },
 
   cycleNodeInclusionState: (projectId, nodeId) => {
+    const beforeState = get();
+    const beforeProject = beforeState.projects[projectId];
+    const before = beforeProject ? beforeState.contexts[beforeProject.active_context_id] : undefined;
     set((state) => {
       const project = state.projects[projectId];
       if (!project) return state;
@@ -2193,6 +2246,15 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
           },
         },
       };
+    });
+    const afterState = get();
+    const afterProject = afterState.projects[projectId];
+    logContextPlanEdit({
+      projectId,
+      before,
+      after: afterProject ? afterState.contexts[afterProject.active_context_id] : undefined,
+      touchedNodeIds: [nodeId],
+      action: 'node_cycle',
     });
   },
 
@@ -2371,6 +2433,9 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
   },
 
   batchToggleInclusion: (projectId, nodeIds, action) => {
+    const beforeState = get();
+    const beforeProject = beforeState.projects[projectId];
+    const before = beforeProject ? beforeState.contexts[beforeProject.active_context_id] : undefined;
     set((state) => {
       const project = state.projects[projectId];
       if (!project) return state;
@@ -2416,6 +2481,15 @@ export const useAppStore = create<AppState>()(persist((set, get) => {
           },
         },
       };
+    });
+    const afterState = get();
+    const afterProject = afterState.projects[projectId];
+    logContextPlanEdit({
+      projectId,
+      before,
+      after: afterProject ? afterState.contexts[afterProject.active_context_id] : undefined,
+      touchedNodeIds: nodeIds,
+      action: 'batch_scope_edit',
     });
   },
 

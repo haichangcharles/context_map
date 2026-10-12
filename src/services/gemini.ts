@@ -20,7 +20,6 @@ type AnthropicMessage = {
 type JsonObjectResponseFormat = { type: 'json_object' };
 type JsonSchemaResponseFormat = { type: 'json_schema'; json_schema: Record<string, unknown> };
 type ResponseFormat = JsonObjectResponseFormat | JsonSchemaResponseFormat;
-type ProviderOverride = 'gemini';
 
 const JSON_OBJECT_RESPONSE_FORMAT: JsonObjectResponseFormat = { type: 'json_object' };
 
@@ -34,7 +33,6 @@ const callOpenAICompat = async (
   system: string,
   messages: AnthropicMessage[],
   responseFormat?: ResponseFormat,
-  providerOverride?: ProviderOverride
 ): Promise<string> => {
   const payloadMessages = [{ role: 'system' as const, content: system }, ...messages];
 
@@ -42,7 +40,7 @@ const callOpenAICompat = async (
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-model-provider': providerOverride || getModelProviderPreference(),
+      'x-model-provider': getModelProviderPreference(),
       'x-openai-model': getOpenAIModelOverride(),
     },
     body: JSON.stringify({
@@ -556,26 +554,6 @@ export const detectStructureSuggestion = async (
     .filter(Boolean)
     .join('\n');
 
-  const structureSuggestionSchema = {
-    type: 'object',
-    properties: {
-      primary_action: { type: 'string', enum: ['continue', 'branch', 'return_parent'] },
-      asset_action: { type: 'string', enum: ['none', 'extract_reasoning', 'extract_task_sop'] },
-      confidence: { type: 'number' },
-      reason: { type: 'string' },
-      asset_reason: { type: 'string' },
-      show_suggestion: { type: 'boolean' },
-    },
-    required: [
-      'primary_action',
-      'asset_action',
-      'confidence',
-      'reason',
-      'asset_reason',
-      'show_suggestion',
-    ],
-  } as const;
-
   const activeUserId = getActiveUserId();
   const userModelBlock =
     getUserModelFeatureEnabled() && activeUserId
@@ -593,9 +571,7 @@ export const detectStructureSuggestion = async (
   try {
     const result = await callOpenAICompat(
       systemPrompt,
-      messages,
-      { type: 'json_schema', json_schema: structureSuggestionSchema },
-      'gemini'
+      messages
     );
     return parseStructureSuggestionDecision(result);
   } catch (error) {

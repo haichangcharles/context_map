@@ -1,11 +1,12 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useAppStore } from '../store';
 import { Node, Branch, Pattern, PatternType } from '../types';
 import { Send, GitBranch, ArrowUpCircle, CornerUpLeft, Eye, EyeOff, Square, X, Check, TriangleAlert, ChevronLeft, ChevronRight, Rows3, Pencil } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import { detectStructureSuggestion, extractPatternByType, generateResponseStream, generateMainlineSummary, generateBranchSummary } from '../services/gemini';
-import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
+import { appendBranchFeedbackSample, buildQAPair, consumePendingBranchFeedback, getActiveUserId, logBranchDebug, QAPair, setPendingBranchFeedback } from '../utils/branchFeedbackDataset';
+import { logContextPlanProposal, readContextPlanEdits, recordContextTurnPlan } from '../utils/contextPlanEditLog';
 import { flushChatHistoryQueue, logChatNode } from '../services/chatHistory';
 import {
   logStructureSuggestionFeedbackEvent,
@@ -14,6 +15,8 @@ import {
 import { buildInlineSuggestions, clampInlineSuggestionIndex } from '../utils/inlineSuggestions';
 import { createChildTimestampAfter } from '../utils/messageTimestamp';
 import { buildConversationSystemPrompt } from '../utils/promptBuilders';
+import { buildContextGraph, compileTurnContext, proposeContextReturns, reviewContextProposal } from '../domain/contextSteward';
+import { readContextChoices, recordContextChoice } from '../services/contextPreferenceStore';
 import {
   DEFAULT_SCROLL_FOLLOW_THRESHOLD_PX,
   isNearBottom,
@@ -31,6 +34,7 @@ type SuggestionFeedbackContext = {
 };
 
 type PendingBranchSuggestion = {
+  suggestionId: string;
   anchorNodeId: string;
   reason: string;
   nodeIdsToMove: string[];
@@ -41,6 +45,24 @@ type PendingBranchSuggestion = {
   sourceNodeIds?: string[];
   assetSuggestionId?: string;
   assetShownAt?: string;
+};
+
+const logBranchPlanPhase = (
+  projectId: string,
+  suggestion: PendingBranchSuggestion,
+  phase: 'created' | 'shown' | 'accepted' | 'rejected' | 'ignored' | 'expired'
+) => {
+  const state = useAppStore.getState();
+  const project = state.projects[projectId];
+  logContextPlanProposal({
+    suggestionId: suggestion.suggestionId,
+    projectId,
+    context: project ? state.contexts[project.active_context_id] : undefined,
+    phase,
+    originBasePath: suggestion.originBasePath,
+    anchorNodeId: suggestion.anchorNodeId,
+    movedNodeIds: suggestion.nodeIdsToMove,
+  });
 };
 
 type InlineNotice = {
@@ -250,11 +272,12 @@ export default function ConversationStream() {
     addNode, createBranch, acceptSuggestedBranch, promoteBranch, returnToMainline, returnToParentBranch, toggleNodeInclusion,
     updateBranchSummary, updateBranchCompletionSummary, updatePattern, approvePattern, deletePattern, createPattern,
     enablePatternForType, disablePatternForType, updateNodeContent,
-    editNodeContent,
+    editNodeContent, batchToggleInclusion,
     isNodeSelectionMode, nodeSelectionIntent, selectedNodeIds, toggleNodeSelection
   } = useAppStore();
   
   const [input, setInput] = useState('');
+  const [dismissedContextBranchIds, setDismissedContextBranchIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingBranchSuggestion, setPendingBranchSuggestion] = useState<PendingBranchSuggestion | null>(null);
   const [pendingStructureSuggestion, setPendingStructureSuggestion] = useState<PendingStructureSuggestion | null>(null);
@@ -419,6 +442,7 @@ export default function ConversationStream() {
     if (!pendingBranchSuggestion) return;
     if (!context) return;
     if (context.base_path !== pendingBranchSuggestion.originBasePath) {
+      logBranchPlanPhase(pendingBranchSuggestion.feedbackContext.projectId, pendingBranchSuggestion, 'expired');
       if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none' && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
         logSuggestionEvent(
           pendingBranchSuggestion.assetAction,
@@ -560,15 +584,38 @@ export default function ConversationStream() {
     );
   }
 
-  const effectiveNodes = context
-    ? visibleNodes.filter((n) => !context.excluded_nodes.includes(n.node_id))
+  useEffect(() => {
+    if (!pendingBranchSuggestion || typeof IntersectionObserver === 'undefined') return;
+    const card = document.getElementById(`context-plan-branch-suggestion-${pendingBranchSuggestion.suggestionId}`);
+    if (!card) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.5)) {
+        logBranchPlanPhase(pendingBranchSuggestion.feedbackContext.projectId, pendingBranchSuggestion, 'shown');
+        observer.disconnect();
+      }
+    }, { threshold: 0.5 });
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, [pendingBranchSuggestion, activeInlineSuggestionIndex, visibleNodes.length, context?.base_path]);
+
+  const contextGraph = useMemo(
+    () => project ? buildContextGraph(project.project_id, nodes, branches) : null,
+    [project?.project_id, nodes, branches]
+  );
+  const compiledTurnContext = context && contextGraph
+    ? compileTurnContext({ graph: contextGraph, context, visibleNodeIds: visibleNodes.map((node) => node.node_id) })
+    : { nodes: [] as Node[], sources: {}, excludedNodeIds: [] as string[] };
+  const allEffectiveNodes = compiledTurnContext.nodes;
+  const contextReturnProposals = context && contextGraph && project && input.trim().length >= 8
+    ? proposeContextReturns({
+        graph: contextGraph,
+        context,
+        query: input,
+        activeNodeIds: allEffectiveNodes.map((node) => node.node_id),
+        choices: typeof window === 'undefined' ? [] : readContextChoices(window.localStorage),
+        planEdits: typeof window === 'undefined' ? [] : readContextPlanEdits(window.localStorage, getActiveUserId() || 'local-anonymous'),
+      }).filter((proposal) => !dismissedContextBranchIds.includes(proposal.branchId))
     : [];
-  const includedExtraNodes = context
-    ? context.included_nodes.map((id) => nodes[id]).filter(Boolean)
-    : [];
-  
-  const allEffectiveNodes = [...new Set([...effectiveNodes, ...includedExtraNodes])]
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   const globalPatternList = Object.values(patterns).sort(
     (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
   );
@@ -716,12 +763,14 @@ export default function ConversationStream() {
     if (!input.trim() || isLoading) return;
 
     if (pendingBranchSuggestion) {
+      logBranchPlanPhase(pendingBranchSuggestion.feedbackContext.projectId, pendingBranchSuggestion, 'ignored');
       const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
       const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
       const feedbackContext = buildSuggestionFeedbackContext(movedUser, movedAssistant);
 
       const ignoreLevel = getCurrentLevel(isMainline, currentBranch, branches);
       appendBranchFeedbackSample({
+        sample_id: pendingBranchSuggestion.suggestionId,
         current_tldr: feedbackContext.currentTLDR,
         visible_context: feedbackContext.visibleContext,
         history_last_3_qa: feedbackContext.historyLast3QA,
@@ -921,6 +970,15 @@ export default function ConversationStream() {
         : Promise.resolve(null);
 
     const userNodeId = addNode(project.project_id, parentId, 'user', userMsg, branchId);
+    if (liveContext) {
+      recordContextTurnPlan({
+        projectId: project.project_id,
+        turnNodeId: userNodeId,
+        query: userMsg,
+        context: liveContext,
+        selectedNodeIds: allEffectiveNodes.map((node) => node.node_id),
+      });
+    }
     const userTimestamp = useAppStore.getState().nodes[userNodeId]?.timestamp ?? new Date().toISOString();
     const assistantTimestamp = createChildTimestampAfter(userTimestamp, new Date().toISOString());
     const assistantNodeId = addNode(project.project_id, userNodeId, 'assistant', '', branchId, assistantTimestamp);
@@ -1060,7 +1118,8 @@ export default function ConversationStream() {
             );
           }
           logBranchDebug('suggestion-pre-snapshot', buildSuggestionSnapshot());
-          setPendingBranchSuggestion({
+          const branchSuggestion: PendingBranchSuggestion = {
+            suggestionId: createSuggestionId(),
             anchorNodeId: parentId,
             reason: structureDecision.reason || 'This looks like a temporary or off-topic subtask.',
             nodeIdsToMove: [userNodeId, assistantNodeId],
@@ -1071,7 +1130,9 @@ export default function ConversationStream() {
             sourceNodeIds: liveVisibleNodes.map((node) => node.node_id).concat([userNodeId, assistantNodeId]),
             assetSuggestionId: branchExtractSuggestionId,
             assetShownAt: branchExtractShownAt,
-          });
+          };
+          setPendingBranchSuggestion(branchSuggestion);
+          logBranchPlanPhase(branchSuggestion.feedbackContext.projectId, branchSuggestion, 'created');
           logBranchDebug('suggestion-created', {
             anchorNodeId: parentId,
             originBasePath: activeContext.base_path,
@@ -1218,6 +1279,7 @@ export default function ConversationStream() {
       movedAssistantNow.parent_id === movedUserNow.node_id;
 
     if (!isSuggestionStillValid) {
+      logBranchPlanPhase(pendingBranchSuggestion.feedbackContext.projectId, pendingBranchSuggestion, 'expired');
       if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none' && pendingBranchSuggestion.assetSuggestionId && pendingBranchSuggestion.assetShownAt) {
         logSuggestionEvent(
           pendingBranchSuggestion.assetAction,
@@ -1247,6 +1309,7 @@ export default function ConversationStream() {
 
     const acceptLevel = getCurrentLevel(isMainline, currentBranch, branches);
     const acceptSample = {
+      sample_id: pendingBranchSuggestion.suggestionId,
       current_tldr: feedbackContext.currentTLDR,
       visible_context: feedbackContext.visibleContext,
       history_last_3_qa: feedbackContext.historyLast3QA,
@@ -1267,6 +1330,7 @@ export default function ConversationStream() {
       pendingBranchSuggestion.nodeIdsToMove
     );
     if (!createdBranchId) {
+      logBranchPlanPhase(pendingBranchSuggestion.feedbackContext.projectId, pendingBranchSuggestion, 'expired');
       console.warn('[branch-accept] no nodes moved for suggested branch', {
         projectId: project.project_id,
         anchorNodeId: pendingBranchSuggestion.anchorNodeId,
@@ -1291,6 +1355,7 @@ export default function ConversationStream() {
       }
       setBranchSuggestionNotice('Branch suggestion is stale. Please regenerate.');
     } else {
+      logBranchPlanPhase(pendingBranchSuggestion.feedbackContext.projectId, pendingBranchSuggestion, 'accepted');
       setPendingBranchFeedback(createdBranchId, acceptSample);
       if (pendingBranchSuggestion.assetAction && pendingBranchSuggestion.assetAction !== 'none') {
         setPendingStructureSuggestion({
@@ -1315,12 +1380,14 @@ export default function ConversationStream() {
 
   const handleRejectBranchSuggestion = () => {
     if (!pendingBranchSuggestion) return;
+    logBranchPlanPhase(pendingBranchSuggestion.feedbackContext.projectId, pendingBranchSuggestion, 'rejected');
     const movedUser = nodes[pendingBranchSuggestion.nodeIdsToMove[0]];
     const movedAssistant = nodes[pendingBranchSuggestion.nodeIdsToMove[1]];
     const feedbackContext = buildSuggestionFeedbackContext(movedUser, movedAssistant);
 
     const rejectLevel = getCurrentLevel(isMainline, currentBranch, branches);
     appendBranchFeedbackSample({
+      sample_id: pendingBranchSuggestion.suggestionId,
       current_tldr: feedbackContext.currentTLDR,
       visible_context: feedbackContext.visibleContext,
       history_last_3_qa: feedbackContext.historyLast3QA,
@@ -1999,6 +2066,9 @@ export default function ConversationStream() {
                   )}
                   {activeInlineItem && (
                     <div
+                      id={activeInlineItem.kind === 'branch' && pendingBranchSuggestion
+                        ? `context-plan-branch-suggestion-${pendingBranchSuggestion.suggestionId}`
+                        : undefined}
                       className={clsx(
                         "mt-3 rounded-xl px-4 py-3",
                         activeInlineItem.accent === 'amber'
@@ -2177,10 +2247,44 @@ export default function ConversationStream() {
           </div>
         </div>
 
+        {contextReturnProposals.length > 0 && (
+          <div className="max-w-3xl mx-auto mb-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-950" aria-label="Context return suggestions">
+            <div className="font-semibold">Context steward · earlier branches</div>
+            <div className="mt-1 text-xs text-indigo-700">Review what to bring into this turn. Your choice shapes future suggestions.</div>
+            {contextReturnProposals.map((proposal) => (
+              <div key={proposal.branchId} className="mt-2 rounded-lg bg-white px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate font-medium" title={proposal.reason}>{proposal.label}</span>
+                  <button type="button" className="rounded-md bg-indigo-700 px-2 py-1 text-xs text-white" onClick={() => {
+                    const fresh = useAppStore.getState();
+                    const freshProject = fresh.projects[project.project_id];
+                    const freshContext = freshProject ? fresh.contexts[freshProject.active_context_id] : null;
+                    if (!freshContext) return;
+                    const review = reviewContextProposal({
+                      proposal,
+                      context: freshContext,
+                      graph: buildContextGraph(project.project_id, fresh.nodes, fresh.branches),
+                    });
+                    if (!review.valid) { setBranchSuggestionNotice(review.reason || 'Context changed.'); return; }
+                    batchToggleInclusion(project.project_id, review.nodeIds, 'include');
+                    recordContextChoice(window.localStorage, project.project_id, { query: input, branchId: proposal.branchId, decision: 'accepted', at: new Date().toISOString() });
+                  }}>Include {proposal.nodeIds.length}</button>
+                  <button type="button" className="rounded-md px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-100" onClick={() => {
+                  recordContextChoice(window.localStorage, project.project_id, { query: input, branchId: proposal.branchId, decision: 'rejected', at: new Date().toISOString() });
+                  setDismissedContextBranchIds((previous) => [...previous, proposal.branchId]);
+                  }}>Skip</button>
+                </div>
+                <div className="mt-1 space-y-1 text-xs text-zinc-600">
+                  {proposal.nodeIds.map((id) => <p key={id} className="line-clamp-2">{nodes[id]?.content.slice(0, 180)}</p>)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <form onSubmit={handleSend} className="max-w-3xl mx-auto relative flex items-end gap-2">
           <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); setDismissedContextBranchIds([]); }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

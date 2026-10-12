@@ -35,7 +35,7 @@ const resolveOpenAIModelOverride = (req: {
 const buildSiliconflowConfig = (env: Record<string, string>) => {
   const apiKey = env.SILICONFLOW_API_KEY || '';
   const baseUrl = (env.SILICONFLOW_BASE_URL || 'https://api.siliconflow.cn/v1').replace(/\/+$/, '');
-  const model = env.DEEPSEEK_MODEL || env.OPENAI_MODEL || 'deepseek-ai/DeepSeek-V3.2';
+  const model = env.DEEPSEEK_MODEL || 'deepseek-ai/DeepSeek-V3';
   return { provider: 'siliconflow' as const, apiKey, baseUrl, model };
 };
 
