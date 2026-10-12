@@ -606,6 +606,15 @@ export default function ConversationStream() {
     ? compileTurnContext({ graph: contextGraph, context, visibleNodeIds: visibleNodes.map((node) => node.node_id) })
     : { nodes: [] as Node[], sources: {}, excludedNodeIds: [] as string[] };
   const allEffectiveNodes = compiledTurnContext.nodes;
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.node_id));
+  const importedBranchGroups = Object.values((context?.included_nodes || []).reduce<Record<string, { key: string; label: string; nodeIds: string[] }>>((groups, id) => {
+    const node = nodes[id];
+    if (!node || visibleNodeIds.has(id)) return groups;
+    const key = node.branch_id || 'mainline';
+    const label = key === 'mainline' ? 'Mainline' : (branches[key]?.intent_summary || 'Earlier branch');
+    (groups[key] ||= { key, label, nodeIds: [] }).nodeIds.push(id);
+    return groups;
+  }, {}));
   const contextReturnProposals = context && contextGraph && project && input.trim().length >= 8
     ? proposeContextReturns({
         graph: contextGraph,
@@ -2247,6 +2256,19 @@ export default function ConversationStream() {
           </div>
         </div>
 
+        {importedBranchGroups.length > 0 && (
+          <div className="max-w-3xl mx-auto mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600" aria-label="Imported context">
+            <span>Active imports:</span>
+            {importedBranchGroups.map((group) => (
+              <button key={group.key} type="button" className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 text-emerald-900 hover:bg-emerald-100" title={`Remove ${group.nodeIds.length} imported messages from the next turn`} onClick={() => {
+                batchToggleInclusion(project.project_id, group.nodeIds, 'natural');
+                setDismissedContextBranchIds((previous) => [...previous, group.key]);
+              }}>
+                {group.label.slice(0, 42)} · {group.nodeIds.length} ×
+              </button>
+            ))}
+          </div>
+        )}
         {contextReturnProposals.length > 0 && (
           <div className="max-w-3xl mx-auto mb-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-950" aria-label="Context return suggestions">
             <div className="font-semibold">Context steward · earlier branches</div>

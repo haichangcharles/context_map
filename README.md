@@ -102,7 +102,7 @@ npm run test:context-steward # graph, context compiler, preference policy
 - **Projects** + **Conversation Stream** + **Context Map** stay in sync
 - **Branch / Re-Branch / Promote**, custom mainline start/end
 - **Context controls:** per-node include/exclude and batch operations
-- **Cross-turn context stewardship:** retrieve relevant material from an earlier branch, review the exact messages, and include them in the next turn
+- **Cross-turn context stewardship:** retrieve relevant material from an earlier branch, review the exact messages, include them in the next turn, and release imported branch material as the task moves on
 - **Deterministic context compiler:** active path plus explicit includes minus explicit excludes; records the selected node IDs for each sent turn
 - **Local preference learning:** accepted/rejected suggestions and manual plan edits adjust future retrieval sensitivity per user
 - **Structure governance:** Undo / Redo, Reset to Natural

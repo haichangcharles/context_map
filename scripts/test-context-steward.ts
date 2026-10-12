@@ -60,4 +60,10 @@ const manualPreference = learnContextPreference([], [{
 }]);
 assert.equal(manualPreference.manualIncludeCount, 2, 'manual edits must provide cold-start preference evidence');
 assert.equal(manualPreference.evidenceCount, 2);
+const releasePreference = learnContextPreference([], [{
+  action: 'batch_scope_edit',
+  before: { base_path: 'mainline', included_nodes: ['n1', 'n2'], excluded_nodes: [] },
+  after: { base_path: 'mainline', included_nodes: [], excluded_nodes: [] },
+}]);
+assert.equal(releasePreference.manualReleaseCount, 2, 'returning an imported branch to natural state is lifecycle evidence');
 console.log('Context steward graph, retrieval, explicit-plan protection, and preference learning passed.');

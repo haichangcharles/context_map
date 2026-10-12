@@ -31,6 +31,7 @@ export type ContextPreference = {
   minimumScore: number;
   manualIncludeCount: number;
   manualExcludeCount: number;
+  manualReleaseCount: number;
 };
 
 export type ContextProposal = {
@@ -146,6 +147,7 @@ export const learnContextPreference = (choices: ContextChoice[], edits: ContextP
   const manual = edits.slice(-100).filter((edit) => edit.action === 'node_cycle' || edit.action === 'batch_scope_edit');
   const manualIncludeCount = manual.reduce((sum, edit) => sum + edit.after.included_nodes.filter((id) => !edit.before.included_nodes.includes(id)).length, 0);
   const manualExcludeCount = manual.reduce((sum, edit) => sum + edit.after.excluded_nodes.filter((id) => !edit.before.excluded_nodes.includes(id)).length, 0);
+  const manualReleaseCount = manual.reduce((sum, edit) => sum + edit.before.included_nodes.filter((id) => !edit.after.included_nodes.includes(id)).length, 0);
   const positive = accepted.length + manualIncludeCount;
   const total = recent.length + manualIncludeCount + manualExcludeCount;
   const acceptanceRate = total ? positive / total : 0.5;
@@ -154,13 +156,14 @@ export const learnContextPreference = (choices: ContextChoice[], edits: ContextP
   for (const choice of accepted) for (const term of contextTerms(choice.query)) counts.set(term, (counts.get(term) || 0) + 1);
   for (const choice of recent) branchAffinity[choice.branchId] = Math.max(-2, Math.min(2, (branchAffinity[choice.branchId] || 0) + (choice.decision === 'accepted' ? 1 : -1)));
   return {
-    evidenceCount: total,
+    evidenceCount: total + manualReleaseCount,
     acceptanceRate,
     preferredTerms: [...counts].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([term]) => term),
     branchAffinity,
     minimumScore: total < 3 ? 0.29 : Math.max(0.22, Math.min(0.46, 0.38 - (acceptanceRate - 0.5) * 0.24)),
     manualIncludeCount,
     manualExcludeCount,
+    manualReleaseCount,
   };
 };
 
