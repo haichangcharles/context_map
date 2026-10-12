@@ -20,7 +20,6 @@ type AnthropicMessage = {
 type JsonObjectResponseFormat = { type: 'json_object' };
 type JsonSchemaResponseFormat = { type: 'json_schema'; json_schema: Record<string, unknown> };
 type ResponseFormat = JsonObjectResponseFormat | JsonSchemaResponseFormat;
-type ProviderOverride = 'gemini';
 
 const JSON_OBJECT_RESPONSE_FORMAT: JsonObjectResponseFormat = { type: 'json_object' };
 
@@ -34,7 +33,7 @@ const callOpenAICompat = async (
   system: string,
   messages: AnthropicMessage[],
   responseFormat?: ResponseFormat,
-  providerOverride?: ProviderOverride
+  maxCompletionTokens = 4096,
 ): Promise<string> => {
   const payloadMessages = [{ role: 'system' as const, content: system }, ...messages];
 
@@ -42,12 +41,12 @@ const callOpenAICompat = async (
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-model-provider': providerOverride || getModelProviderPreference(),
+      'x-model-provider': getModelProviderPreference(),
       'x-openai-model': getOpenAIModelOverride(),
     },
     body: JSON.stringify({
       messages: payloadMessages,
-      max_completion_tokens: 4096,
+      max_completion_tokens: maxCompletionTokens,
       ...(responseFormat ? { response_format: responseFormat } : {}),
     }),
   });
@@ -373,7 +372,9 @@ export const generateMainlineSummary = async (contextNodes: Node[]): Promise<str
   try {
     return await callOpenAICompat(
       'Summarize the current progress and main task of this conversation in 2-3 sentences. Focus on the core objective and what has been achieved so far.',
-      messages
+      messages,
+      undefined,
+      320
     );
   } catch (error) {
     console.error('Error generating summary:', error);
@@ -389,7 +390,9 @@ export const generateBranchSummary = async (branchNodes: Node[]): Promise<string
       'Summarize this branch conversation in 1-2 very brief sentences (30 words max). ' +
         'State only: (1) what question or intent motivated this branch, and (2) what key takeaway or conclusion it produced for the parent thread. ' +
         'Do NOT include intermediate steps, failed attempts, or implementation details.',
-      messages
+      messages,
+      undefined,
+      160
     );
   } catch (error) {
     console.error('Error generating branch summary:', error);
@@ -556,26 +559,6 @@ export const detectStructureSuggestion = async (
     .filter(Boolean)
     .join('\n');
 
-  const structureSuggestionSchema = {
-    type: 'object',
-    properties: {
-      primary_action: { type: 'string', enum: ['continue', 'branch', 'return_parent'] },
-      asset_action: { type: 'string', enum: ['none', 'extract_reasoning', 'extract_task_sop'] },
-      confidence: { type: 'number' },
-      reason: { type: 'string' },
-      asset_reason: { type: 'string' },
-      show_suggestion: { type: 'boolean' },
-    },
-    required: [
-      'primary_action',
-      'asset_action',
-      'confidence',
-      'reason',
-      'asset_reason',
-      'show_suggestion',
-    ],
-  } as const;
-
   const activeUserId = getActiveUserId();
   const userModelBlock =
     getUserModelFeatureEnabled() && activeUserId
@@ -594,8 +577,8 @@ export const detectStructureSuggestion = async (
     const result = await callOpenAICompat(
       systemPrompt,
       messages,
-      { type: 'json_schema', json_schema: structureSuggestionSchema },
-      'gemini'
+      undefined,
+      320
     );
     return parseStructureSuggestionDecision(result);
   } catch (error) {
